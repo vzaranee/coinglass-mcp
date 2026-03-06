@@ -282,7 +282,13 @@ async def coinglass_calendar(
 # ============================================================================
 
 
-ActionMarketInfo = Literal["coins", "pairs", "exchanges"]
+ActionMarketInfo = Literal[
+    "coins",
+    "pairs",
+    "exchanges",
+    "supported_exchanges",
+    "delisted_pairs",
+]
 
 
 @mcp.tool(
@@ -299,7 +305,7 @@ async def coinglass_market_info(
     action: Annotated[
         ActionMarketInfo,
         Field(
-            description="coins: list supported coins | pairs: exchange trading pairs | exchanges: list exchanges"
+            description="coins: list supported coins | pairs: exchange trading pairs | exchanges: list exchanges from pairs | supported_exchanges: futures exchanges | delisted_pairs: inactive pairs"
         ),
     ],
     exchange: Annotated[
@@ -329,13 +335,26 @@ async def coinglass_market_info(
             data = {exchange: data.get(exchange, [])}
         return ok(action, data, exchange=exchange)
 
-    else:  # exchanges
+    elif action == "exchanges":
         data = await client.request("/api/futures/supported-exchange-pairs")
         exchanges = list(data.keys()) if isinstance(data, dict) else []
         return ok(action, exchanges, total=len(exchanges))
 
+    elif action == "supported_exchanges":
+        data = await client.request("/api/futures/supported-exchanges")
+        return ok(action, data, total=len(data) if isinstance(data, list) else None)
 
-ActionMarketData = Literal["coins_summary", "pairs_summary", "price_changes"]
+    else:  # delisted_pairs
+        data = await client.request("/api/futures/delisted-exchange-pairs")
+        return ok(action, data, total=len(data) if isinstance(data, list) else None)
+
+
+ActionMarketData = Literal[
+    "coins_summary",
+    "pairs_summary",
+    "price_changes",
+    "volume_footprint",
+]
 
 
 @mcp.tool(
@@ -352,7 +371,7 @@ async def coinglass_market_data(
     action: Annotated[
         ActionMarketData,
         Field(
-            description="coins_summary: single coin metrics (requires symbol) | pairs_summary: per-pair metrics | price_changes: price % changes across timeframes"
+            description="coins_summary: single coin metrics (requires symbol) | pairs_summary: per-pair metrics | price_changes: price % changes across timeframes | volume_footprint: futures footprint snapshots"
         ),
     ],
     symbol: Annotated[
@@ -382,6 +401,7 @@ async def coinglass_market_data(
         "coins_summary": "/api/futures/coins-markets",
         "pairs_summary": "/api/futures/pairs-markets",
         "price_changes": "/api/futures/coins-price-change",
+        "volume_footprint": "/api/futures/volume/footprint-history",
     }
 
     params = {"symbol": symbol} if symbol else None
@@ -743,7 +763,14 @@ async def coinglass_funding_current(
 # ============================================================================
 
 
-ActionLS = Literal["global", "top_accounts", "top_positions", "taker_ratio"]
+ActionLS = Literal[
+    "global",
+    "top_accounts",
+    "top_positions",
+    "taker_ratio",
+    "net_position",
+    "net_position_v2",
+]
 
 
 @mcp.tool(
@@ -760,7 +787,7 @@ async def coinglass_long_short(
     action: Annotated[
         ActionLS,
         Field(
-            description="global: global L/S ratio | top_accounts: top traders by account | top_positions: top traders by position | taker_ratio: taker buy/sell ratio"
+            description="global: global L/S ratio | top_accounts: top traders by account | top_positions: top traders by position | taker_ratio: taker buy/sell ratio | net_position: futures net position history | net_position_v2: v2 net position history"
         ),
     ],
     exchange: Annotated[
@@ -773,6 +800,12 @@ async def coinglass_long_short(
     limit: Annotated[
         int, Field(ge=1, le=4500, description="Number of records")
     ] = 500,
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp in milliseconds")
+    ] = None,
+    end_time: Annotated[
+        int | None, Field(description="End timestamp in milliseconds")
+    ] = None,
     ctx: Context = None,
 ) -> dict:
     """Get long/short ratio data.
@@ -798,10 +831,21 @@ async def coinglass_long_short(
         "top_accounts": "/api/futures/top-long-short-account-ratio/history",
         "top_positions": "/api/futures/top-long-short-position-ratio/history",
         "taker_ratio": "/api/futures/taker-buy-sell-volume/exchange-list",
+        "net_position": "/api/futures/net-position/history",
+        "net_position_v2": "/api/futures/v2/net-position/history",
     }
 
     if action == "taker_ratio":
         params = {"symbol": pair, "range": "24h"}
+    elif action in {"net_position", "net_position_v2"}:
+        params = {
+            "exchange": exchange,
+            "symbol": pair,
+            "interval": interval,
+            "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
     else:
         params = {
             "exchange": exchange,
@@ -827,7 +871,7 @@ async def coinglass_long_short(
 # ============================================================================
 
 
-ActionLiqHistory = Literal["pair", "aggregated", "by_coin", "by_exchange"]
+ActionLiqHistory = Literal["pair", "aggregated", "by_coin", "by_exchange", "max_pain"]
 
 
 @mcp.tool(
@@ -844,7 +888,7 @@ async def coinglass_liq_history(
     action: Annotated[
         ActionLiqHistory,
         Field(
-            description="pair: single pair liquidations | aggregated: by coin | by_coin: coin summary | by_exchange: exchange summary"
+            description="pair: single pair liquidations | aggregated: by coin | by_coin: coin summary | by_exchange: exchange summary | max_pain: liquidation max pain by range"
         ),
     ],
     symbol: Annotated[
@@ -881,7 +925,8 @@ async def coinglass_liq_history(
         - All coins summary: action="by_coin"
         - By exchange: action="by_exchange"
     """
-    check_interval(ctx, interval)
+    if action in {"pair", "aggregated"}:
+        check_interval(ctx, interval)
     client = get_client(ctx)
 
     endpoints = {
@@ -889,6 +934,7 @@ async def coinglass_liq_history(
         "aggregated": "/api/futures/liquidation/aggregated-history",
         "by_coin": "/api/futures/liquidation/coin-list",
         "by_exchange": "/api/futures/liquidation/exchange-list",
+        "max_pain": "/api/futures/liquidation/max-pain",
     }
 
     if action == "pair":
@@ -910,6 +956,8 @@ async def coinglass_liq_history(
         }
     elif action == "by_exchange":
         params = {"range": range or "24h", "symbol": symbol}
+    elif action == "max_pain":
+        params = {"range": range}
     else:
         params = {}
 
@@ -1308,7 +1356,7 @@ async def coinglass_bitfinex_longs_shorts(
 # ============================================================================
 
 
-ActionTaker = Literal["pair_history", "coin_history", "by_exchange"]
+ActionTaker = Literal["pair_history", "coin_history", "by_exchange", "aggregated_ratio"]
 
 
 @mcp.tool(
@@ -1325,7 +1373,7 @@ async def coinglass_taker(
     action: Annotated[
         ActionTaker,
         Field(
-            description="pair_history: single pair | coin_history: aggregated | by_exchange: ratio by exchange"
+            description="pair_history: single pair | coin_history: aggregated | by_exchange: ratio by exchange | aggregated_ratio: aggregated taker buy/sell ratio history"
         ),
     ],
     symbol: Annotated[
@@ -1360,6 +1408,12 @@ async def coinglass_taker(
     limit: Annotated[
         int, Field(ge=1, le=4500, description="Number of records")
     ] = 500,
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp in milliseconds")
+    ] = None,
+    end_time: Annotated[
+        int | None, Field(description="End timestamp in milliseconds")
+    ] = None,
     ctx: Context = None,
 ) -> dict:
     """Get taker buy/sell volume data.
@@ -1380,6 +1434,7 @@ async def coinglass_taker(
             "pair_history": "/api/futures/v2/taker-buy-sell-volume/history",
             "coin_history": "/api/futures/aggregated-taker-buy-sell-volume/history",
             "by_exchange": "/api/futures/taker-buy-sell-volume/exchange-list",
+            "aggregated_ratio": "/api/futures/aggregatedTakerBuySellVolumeRatio/history",
         }
     else:
         endpoints = {
@@ -1406,10 +1461,25 @@ async def coinglass_taker(
             "limit": limit,
             "exchange_list": exchange_list or default_exchange_list,
         }
-    else:
+    elif action == "by_exchange":
         if market != "futures":
             raise ValueError("Action 'by_exchange' is only available for futures market")
         params = {"symbol": symbol, "range": range or "24h"}
+    elif action == "aggregated_ratio":
+        if market != "futures":
+            raise ValueError(
+                "Action 'aggregated_ratio' is only available for futures market"
+            )
+        params = {
+            "exchange": exchange,
+            "symbol": pair,
+            "interval": interval,
+            "limit": limit,
+            "startTime": start_time,
+            "endTime": end_time,
+        }
+    else:
+        raise ValueError(f"Unsupported action '{action}' for market '{market}'")
 
     data = await request_with_fallback(client, endpoints[action], params)
 
