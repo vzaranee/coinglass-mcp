@@ -757,6 +757,13 @@ async def coinglass_liq_history(
     interval: Annotated[
         str, Field(description="Interval: m5, h1, h4, h12, d1")
     ] = "h1",
+    range: Annotated[
+        str | None, Field(description="Range for by_exchange action: 4h, 12h, 24h")
+    ] = None,
+    exchange_list: Annotated[
+        str | None,
+        Field(description="Comma-separated exchanges for aggregated action"),
+    ] = None,
     limit: Annotated[
         int, Field(ge=1, le=4500, description="Number of records")
     ] = 500,
@@ -790,7 +797,17 @@ async def coinglass_liq_history(
             "limit": limit,
         }
     elif action == "aggregated":
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
+        params = {
+            "exchange_list": (
+                exchange_list
+                or "Binance,OKX,Bybit,dYdX,Bitget,Huobi,Gate,CoinEx,Kraken,BingX"
+            ),
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+        }
+    elif action == "by_exchange":
+        params = {"range": range or "24h", "symbol": symbol}
     else:
         params = {}
 
@@ -810,15 +827,21 @@ async def coinglass_liq_history(
     },
 )
 async def coinglass_liq_orders(
+    exchange: Annotated[
+        str, Field(description="Exchange (e.g., 'Binance')")
+    ] = "Binance",
     symbol: Annotated[
-        str | None, Field(description="Filter by coin (e.g., 'BTC')")
+        str, Field(description="Coin symbol (e.g., 'BTC')")
+    ] = "BTC",
+    min_liquidation_amount: Annotated[
+        str, Field(description="Minimum liquidation amount (e.g., '10000')")
+    ] = "10000",
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp (seconds)")
     ] = None,
-    side: Annotated[
-        Literal["long", "short"] | None, Field(description="Filter by side")
+    end_time: Annotated[
+        int | None, Field(description="End timestamp (seconds)")
     ] = None,
-    limit: Annotated[
-        int, Field(ge=1, le=100, description="Number of orders")
-    ] = 50,
     ctx: Context = None,
 ) -> dict:
     """Get real-time liquidation orders stream.
@@ -835,10 +858,16 @@ async def coinglass_liq_orders(
     check_plan(ctx, "orders")
     client = get_client(ctx)
 
-    params = {"symbol": symbol, "side": side, "limit": limit}
+    params = {
+        "exchange": exchange,
+        "symbol": symbol,
+        "min_liquidation_amount": min_liquidation_amount,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
     data = await client.request("/api/futures/liquidation/order", params)
 
-    return ok("orders", data, symbol=symbol, side=side)
+    return ok("orders", data, exchange=exchange, symbol=symbol)
 
 
 ActionLiqHeatmap = Literal["pair_heatmap", "coin_heatmap", "pair_map", "coin_map"]
@@ -967,6 +996,10 @@ async def coinglass_ob_history(
     range: Annotated[
         str, Field(description="Depth range from mid price: 1, 2, 5 (%)")
     ] = "2",
+    exchange_list: Annotated[
+        str | None,
+        Field(description="Comma-separated exchanges for coin_depth aggregation"),
+    ] = None,
     limit: Annotated[
         int, Field(ge=1, le=4500, description="Number of records")
     ] = 500,
@@ -994,6 +1027,17 @@ async def coinglass_ob_history(
         params = {
             "exchange": exchange,
             "symbol": pair,
+            "interval": interval,
+            "range": range,
+            "limit": limit,
+        }
+    elif action == "coin_depth":
+        params = {
+            "exchange_list": (
+                exchange_list
+                or "Binance,OKX,Bybit,dYdX,Bitget,Huobi,Gate,CoinEx,Kraken,BingX"
+            ),
+            "symbol": symbol,
             "interval": interval,
             "range": range,
             "limit": limit,
@@ -1136,6 +1180,9 @@ async def coinglass_bitfinex_longs_shorts(
     symbol: Annotated[
         str, Field(description="Coin symbol (e.g., 'BTC', 'ETH')")
     ] = "BTC",
+    interval: Annotated[
+        str, Field(description="Interval (e.g., '1h', '4h', '1d')")
+    ] = "1d",
     ctx: Context = None,
 ) -> dict:
     """Get Bitfinex margin long/short data.
@@ -1148,8 +1195,10 @@ async def coinglass_bitfinex_longs_shorts(
         - ETH margin positions: symbol="ETH"
     """
     client = get_client(ctx)
-    data = await client.request("/api/bitfinex-margin-long-short", {"symbol": symbol})
-    return ok("bitfinex_margin", data, symbol=symbol)
+    data = await client.request(
+        "/api/bitfinex-margin-long-short", {"symbol": symbol, "interval": interval}
+    )
+    return ok("bitfinex_margin", data, symbol=symbol, interval=interval)
 
 
 # ============================================================================
