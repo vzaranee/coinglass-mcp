@@ -1,0 +1,411 @@
+/api/article/list
+  optional: ['start_time', 'end_time', 'language', 'page', 'per_page']
+
+/api/bitfinex-margin-long-short
+  REQUIRED: ['symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/borrow-interest-rate/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/bull-market-peak-indicator
+
+/api/calendar/central-bank-activities
+  optional: ['start_time', 'end_time']
+
+/api/calendar/economic-data
+  optional: ['start_time', 'end_time', 'language']
+
+/api/calendar/financial-events
+  optional: ['start_time', 'end_time']
+
+/api/chain/v2/whale-transfer
+  optional: ['symbol', 'start_time', 'end_time']
+
+/api/coinbase-premium-index
+  REQUIRED: ['interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/etf/bitcoin/detail
+  REQUIRED: ['ticker']
+
+/api/etf/bitcoin/flow-history
+
+/api/etf/bitcoin/history
+  REQUIRED: ['ticker']
+
+/api/etf/bitcoin/list
+
+/api/etf/bitcoin/net-assets/history
+  optional: ['ticker']
+
+/api/etf/bitcoin/premium-discount/history
+  optional: ['ticker']
+
+/api/etf/bitcoin/price/history
+  REQUIRED: ['ticker', 'range']
+
+/api/etf/ethereum/flow-history
+
+/api/etf/ethereum/list
+
+/api/etf/ethereum/net-assets/history
+
+/api/etf/solana/flow-history
+
+/api/etf/xrp/flow-history
+
+/api/exchange/assets
+  REQUIRED: ['exchange']
+  optional: ['per_page', 'page']
+
+/api/exchange/balance/chart
+  REQUIRED: ['symbol']
+
+/api/exchange/balance/list
+  REQUIRED: ['symbol']
+
+/api/exchange/chain/tx/list
+  optional: ['symbol', 'start_time', 'min_usd', 'per_page', 'page']
+
+/api/exchange_assets_transparency/list
+
+/api/futures/aggregated-taker-buy-sell-volume/history
+  REQUIRED: ['exchange_list', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'unit']
+
+/api/futures/aggregatedTakerBuySellVolumeRatio/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'startTime', 'endTime']
+
+/api/futures/basis/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/cdri-index/history 
+
+/api/futures/cgdi-index/history  
+
+/api/futures/coins-markets
+  optional: ['exchange_list', 'per_page', 'page']
+
+/api/futures/coins-price-change
+
+/api/futures/delisted-exchange-pairs
+
+/api/futures/funding-rate/accumulated-exchange-list
+  REQUIRED: ['range']
+
+/api/futures/funding-rate/arbitrage
+  REQUIRED: ['usd']
+  optional: ['exchange_list']
+
+/api/futures/funding-rate/exchange-list
+
+/api/futures/funding-rate/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/funding-rate/oi-weight-history
+  REQUIRED: ['symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/funding-rate/vol-weight-history
+  REQUIRED: ['symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/global-long-short-account-ratio/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/indicators/boll
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'series_type', 'window', 'mult']
+
+/api/futures/indicators/ema
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'window', 'series_type']
+
+/api/futures/indicators/ma
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'window', 'series_type']
+
+/api/futures/indicators/macd
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'series_type', 'fast_window', 'slow_window', 'signal_window']
+
+/api/futures/indicators/rsi
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'window', 'series_type']
+
+/api/futures/liquidation/aggregated-heatmap/model1
+  REQUIRED: ['symbol', 'range']
+
+/api/futures/liquidation/aggregated-heatmap/model2
+  REQUIRED: ['symbol', 'range']
+
+/api/futures/liquidation/aggregated-heatmap/model3
+  REQUIRED: ['symbol', 'range']
+
+/api/futures/liquidation/aggregated-history
+  REQUIRED: ['exchange_list', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/liquidation/aggregated-map
+  REQUIRED: ['symbol', 'range']
+
+/api/futures/liquidation/coin-list
+  REQUIRED: ['exchange']
+
+/api/futures/liquidation/exchange-list
+  REQUIRED: ['range']
+  optional: ['symbol']
+
+/api/futures/liquidation/heatmap/model1
+  REQUIRED: ['exchange', 'symbol', 'range']
+
+/api/futures/liquidation/heatmap/model2
+  REQUIRED: ['exchange', 'symbol', 'range']
+
+/api/futures/liquidation/heatmap/model3
+  REQUIRED: ['exchange', 'symbol', 'range']
+
+/api/futures/liquidation/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/liquidation/map
+  REQUIRED: ['exchange', 'symbol', 'range']
+
+/api/futures/liquidation/max-pain
+  optional: ['range']
+
+/api/futures/liquidation/order
+  REQUIRED: ['exchange', 'symbol', 'min_liquidation_amount']
+  optional: ['start_time', 'end_time']
+
+/api/futures/net-position/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/open-interest/aggregated-coin-margin-history
+  REQUIRED: ['exchange_list', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/open-interest/aggregated-history
+  REQUIRED: ['symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'unit']
+
+/api/futures/open-interest/aggregated-stablecoin-history
+  REQUIRED: ['exchange_list', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/open-interest/exchange-history-chart
+  REQUIRED: ['symbol', 'range']
+  optional: ['unit']
+
+/api/futures/open-interest/exchange-list
+  REQUIRED: ['symbol']
+
+/api/futures/open-interest/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'unit']
+
+/api/futures/orderbook/aggregated-ask-bids-history
+  REQUIRED: ['exchange_list', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'range']
+
+/api/futures/orderbook/ask-bids-history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'range']
+
+/api/futures/orderbook/history
+  REQUIRED: ['exchange', 'symbol', 'interval', 'limit']
+  optional: ['start_time', 'end_time']
+
+/api/futures/orderbook/large-limit-order
+  REQUIRED: ['exchange', 'symbol']
+
+/api/futures/orderbook/large-limit-order-history
+  REQUIRED: ['exchange', 'symbol', 'start_time', 'end_time', 'state']
+
+/api/futures/pairs-markets
+  REQUIRED: ['symbol']
+
+/api/futures/price/history
+  REQUIRED: ['exchange', 'symbol', 'interval', 'limit']
+  optional: ['start_time', 'end_time']
+
+/api/futures/rsi/list
+
+/api/futures/supported-coins
+
+/api/futures/supported-exchange-pairs
+  optional: ['exchange']
+
+/api/futures/supported-exchanges
+
+/api/futures/taker-buy-sell-volume/exchange-list
+  REQUIRED: ['symbol', 'range']
+
+/api/futures/top-long-short-account-ratio/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/top-long-short-position-ratio/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/v2/net-position/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/v2/taker-buy-sell-volume/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/futures/volume/footprint-history
+
+/api/futures/whale-index/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/grayscale/holdings-list
+
+/api/grayscale/premium-history
+  REQUIRED: ['symbol']
+
+/api/hk-etf/bitcoin/flow-history
+
+/api/hyperliquid/position
+  REQUIRED: ['symbol']
+  optional: ['current_page']
+
+/api/hyperliquid/whale-alert
+
+/api/hyperliquid/whale-position
+
+/api/index/2-year-ma-multiplier
+
+/api/index/200-week-moving-average-heatmap
+
+/api/index/ahr999
+
+/api/index/altcoin-season
+
+/api/index/bitcoin-active-addresses
+
+/api/index/bitcoin-correlation
+
+/api/index/bitcoin-dominance
+
+/api/index/bitcoin-long-term-holder-supply
+
+/api/index/bitcoin-lth-realized-price
+
+/api/index/bitcoin-lth-sopr
+
+/api/index/bitcoin-macro-oscillator
+
+/api/index/bitcoin-net-unrealized-profit-loss
+
+/api/index/bitcoin-new-addresses
+
+/api/index/bitcoin-reserve-risk
+
+/api/index/bitcoin-rhodl-ratio
+
+/api/index/bitcoin-short-term-holder-supply
+
+/api/index/bitcoin-sth-realized-price
+
+/api/index/bitcoin-sth-sopr
+
+/api/index/bitcoin-vs-global-m2-growth
+
+/api/index/bitcoin-vs-us-m2-growth
+
+/api/index/bitcoin/bubble-index
+
+/api/index/bitcoin/profitable-days
+
+/api/index/bitcoin/rainbow-chart
+
+/api/index/fear-greed-history
+
+/api/index/golden-ratio-multiplier
+
+/api/index/option-vs-futures-oi-ratio
+
+/api/index/pi-cycle-indicator
+
+/api/index/puell-multiple
+
+/api/index/stableCoin-marketCap-history
+
+/api/index/stock-flow
+
+/api/large-orders
+  REQUIRED: ['exchanges', 'symbol', 'type']
+  optional: ['startTime', 'endTime', 'limit']
+
+/api/option/exchange-oi-history
+  REQUIRED: ['symbol', 'unit', 'range']
+
+/api/option/exchange-vol-history
+  REQUIRED: ['symbol', 'unit']
+
+/api/option/info
+  REQUIRED: ['symbol']
+
+/api/option/max-pain
+  REQUIRED: ['symbol', 'exchange']
+
+/api/orderbook/large-limit-order-
+  REQUIRED: ['exName', 'symbol', 'type']
+
+/api/orderbook/large-limit-order-history-
+  REQUIRED: ['exName', 'symbol', 'type']
+  optional: ['state', 'limit', 'startTime', 'endTime']
+
+/api/spot/aggregated-taker-buy-sell-volume/history
+  REQUIRED: ['exchange_list', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'unit']
+
+/api/spot/coins-markets
+  optional: ['per_page', 'page']
+
+/api/spot/orderbook/aggregated-ask-bids-history
+  REQUIRED: ['exchange_list', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'range']
+
+/api/spot/orderbook/ask-bids-history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time', 'range']
+
+/api/spot/orderbook/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/spot/orderbook/large-limit-order
+  REQUIRED: ['exchange', 'symbol']
+
+/api/spot/orderbook/large-limit-order-history
+  REQUIRED: ['exchange', 'symbol', 'start_time', 'end_time', 'state']
+
+/api/spot/pairs-markets
+  REQUIRED: ['symbol']
+
+/api/spot/price/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
+/api/spot/supported-coins
+
+/api/spot/supported-exchange-pairs
+
+/api/spot/taker-buy-sell-volume/history
+  REQUIRED: ['exchange', 'symbol', 'interval']
+  optional: ['limit', 'start_time', 'end_time']
+
