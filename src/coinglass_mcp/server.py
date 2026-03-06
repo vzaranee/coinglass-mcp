@@ -18,7 +18,7 @@ This server provides 22 tools for accessing CoinGlass API data including:
 
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Optional
 
 import httpx
 from fastmcp import Context, FastMCP
@@ -731,6 +731,9 @@ async def coinglass_funding_current(
     symbol: Annotated[
         str | None, Field(description="Filter by coin (e.g., 'BTC')")
     ] = None,
+    range: Annotated[
+        Optional[str], Field(description="Time range for accumulated funding (e.g., 24h, 7d)")
+    ] = None,
     ctx: Context = None,
 ) -> dict:
     """Get current funding rate data across exchanges.
@@ -752,10 +755,13 @@ async def coinglass_funding_current(
         "arbitrage": "/api/futures/funding-rate/arbitrage",
     }
 
-    params = {"symbol": symbol} if symbol else None
+    params = {
+        "symbol": symbol,
+        "range": range if action == "accumulated" else None,
+    }
     data = await client.request(endpoints[action], params)
 
-    return ok(action, data, symbol=symbol)
+    return ok(action, data, symbol=symbol, range=range)
 
 
 # ============================================================================
@@ -1288,7 +1294,7 @@ async def coinglass_ob_large_orders(
 
     if action == "current":
         endpoint = "/api/futures/orderbook/large-limit-order"
-        params = {"exchange": exchange, "symbol": pair, "limit": limit}
+        params = {"exchange": exchange, "symbol": symbol or pair, "limit": limit}
     elif action == "history":
         endpoint = "/api/futures/orderbook/large-limit-order-history"
         params = {
@@ -1791,6 +1797,8 @@ async def coinglass_spot(
         }
     elif action == "volume_footprint_history":
         params = None
+    elif action == "pairs_markets":
+        params = {"symbol": symbol}
     else:
         params = {}
 
@@ -1834,6 +1842,9 @@ async def coinglass_options(
     symbol: Annotated[
         Literal["BTC", "ETH"], Field(description="BTC or ETH only")
     ],
+    exchange: Annotated[
+        Optional[str], Field(description="Exchange for max_pain (e.g., Deribit, OKX)")
+    ] = None,
     range: Annotated[
         str | None, Field(description="Time range: 7d, 30d, 90d")
     ] = None,
@@ -1858,13 +1869,13 @@ async def coinglass_options(
         "volume_history": "/api/option/exchange-vol-history",
     }
 
-    params = {"symbol": symbol}
+    params = {"symbol": symbol, "exchange": exchange if action == "max_pain" else None}
     if range:
         params["range"] = range
 
     data = await client.request(endpoints[action], params)
 
-    return ok(action, data, symbol=symbol, range=range)
+    return ok(action, data, symbol=symbol, exchange=exchange, range=range)
 
 
 # ============================================================================
@@ -1902,6 +1913,10 @@ async def coinglass_onchain(
     exchange: Annotated[str | None, Field(description="Exchange filter")] = None,
     asset: Annotated[
         str | None, Field(description="Asset: BTC, ETH, USDT")
+    ] = None,
+    symbol: Annotated[
+        Optional[str],
+        Field(description="Symbol filter for assets/balance_list (e.g., BTC, ETH)"),
     ] = None,
     range: Annotated[
         str | None, Field(description="Time range: 7d, 30d, 90d")
@@ -1949,14 +1964,18 @@ async def coinglass_onchain(
         "range": range,
         "type": transfer_type,
         "limit": limit,
-        "symbol": asset if action == "whale_transfer" else None,
+        "symbol": (
+            symbol
+            if action in {"assets", "balance_list"}
+            else asset if action == "whale_transfer" else None
+        ),
         "start_time": start_time if action == "whale_transfer" else None,
         "end_time": end_time if action == "whale_transfer" else None,
     }
 
     data = await client.request(endpoints[action], params)
 
-    return ok(action, data, exchange=exchange, asset=asset)
+    return ok(action, data, exchange=exchange, asset=asset, symbol=symbol)
 
 
 # ============================================================================
@@ -2140,6 +2159,9 @@ async def coinglass_grayscale(
     fund: Annotated[
         str | None, Field(description="Fund: GBTC, ETHE, etc.")
     ] = None,
+    symbol: Annotated[
+        Optional[str], Field(description="Asset symbol for premium (e.g., BTC, ETH)")
+    ] = None,
     range: Annotated[
         str | None, Field(description="Time range: 30d, 90d, 1y")
     ] = None,
@@ -2162,10 +2184,10 @@ async def coinglass_grayscale(
         "premium": "/api/grayscale/premium-history",
     }
 
-    params = {"fund": fund, "range": range}
+    params = {"fund": fund, "symbol": symbol if action == "premium" else None, "range": range}
     data = await request_with_fallback(client, endpoints[action], params)
 
-    return ok(action, data, fund=fund, range=range)
+    return ok(action, data, fund=fund, symbol=symbol, range=range)
 
 
 # ============================================================================
