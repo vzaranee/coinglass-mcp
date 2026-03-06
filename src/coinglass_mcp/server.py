@@ -245,12 +245,28 @@ def _instrument_candidates(exchange: str | None, pair: str) -> list[str]:
         dashed = f"{base}-{quote}"
         underscored = f"{base}_{quote}"
         okx_swap = f"{base}-{quote}-SWAP"
-        if exchange_key == "okx":
-            candidates.extend([okx_swap, dashed, compact, underscored])
-        elif exchange_key == "gate":
-            candidates.extend([underscored, compact, dashed, okx_swap])
-        else:
-            candidates.extend([compact, dashed, underscored, okx_swap])
+        bitget_swap = f"{base}{quote}_UMCBL"
+
+        # Explicit exchange formats:
+        # Binance/Bybit: ETHUSDT
+        # OKX: ETH-USDT-SWAP
+        # Gate/MEXC: ETH_USDT
+        # HTX: ETH-USDT
+        # Bitget: ETHUSDT_UMCBL
+        exchange_formats: dict[str, list[str]] = {
+            "binance": [compact],
+            "bybit": [compact],
+            "okx": [okx_swap, dashed],
+            "gate": [underscored],
+            "mexc": [underscored],
+            "htx": [dashed],
+            "huobi": [dashed],
+            "bitget": [bitget_swap, compact],
+        }
+
+        preferred = exchange_formats.get(exchange_key, [compact])
+        candidates.extend(preferred)
+        candidates.extend([compact, dashed, underscored, okx_swap, bitget_swap])
 
     candidates.extend([raw, upper_raw])
 
@@ -340,6 +356,12 @@ ENDPOINT_BITFINEX_LONG_SHORT_HISTORY = "/api/bitfinex-margin-long-short"
 ENDPOINT_ONCHAIN_BALANCE_LIST = "/api/exchange/balance/list"
 ENDPOINT_ONCHAIN_WHALE_TRANSFER = "/api/chain/v2/whale-transfer"
 ENDPOINT_HYPERLIQUID_WHALE_ALERTS = "/api/hyperliquid/whale-alert"
+ENDPOINT_FUTURES_AGGREGATED_TAKER_RATIO_HISTORY = (
+    "/api/futures/aggregatedTakerBuySellVolumeRatio/history"
+)
+# These paths include trailing spaces in the published OpenAPI spec.
+ENDPOINT_CDRI_INDEX_HISTORY = "/api/futures/cdri-index/history "
+ENDPOINT_CGDI_INDEX_HISTORY = "/api/futures/cgdi-index/history  "
 
 
 # ============================================================================
@@ -497,9 +519,10 @@ async def coinglass_market_info(
         return ok(action, data, total=len(data) if isinstance(data, list) else None)
 
     elif action == "pairs":
-        data = await client.request("/api/futures/supported-exchange-pairs")
-        if exchange and isinstance(data, dict):
-            data = {exchange: data.get(exchange, [])}
+        data = await client.request(
+            "/api/futures/supported-exchange-pairs",
+            {"exchange": exchange} if exchange else None,
+        )
         return ok(action, data, exchange=exchange)
 
     elif action == "exchanges":
@@ -538,7 +561,7 @@ async def coinglass_market_data(
     action: Annotated[
         ActionMarketData,
         Field(
-            description="coins_summary: single coin metrics (requires symbol) | pairs_summary: per-pair metrics | price_changes: price % changes across timeframes | volume_footprint: futures footprint snapshots"
+            description="coins_summary: single coin metrics (client-side filter) | pairs_summary: per-pair metrics (API requires symbol) | price_changes: price % changes across timeframes | volume_footprint: futures footprint snapshots"
         ),
     ],
     symbol: Annotated[
@@ -552,7 +575,8 @@ async def coinglass_market_data(
     Returns aggregated market metrics including price, open interest, volume,
     and funding rates. Data is updated frequently (30 second cache).
 
-    Note: coins_summary requires symbol parameter.
+    Note: pairs_summary requires symbol in the CoinGlass API. If omitted,
+    this tool defaults to BTC for compatibility.
 
     Examples:
         - BTC metrics: action="coins_summary", symbol="BTC"
@@ -571,8 +595,24 @@ async def coinglass_market_data(
         "volume_footprint": "/api/futures/volume/footprint-history",
     }
 
-    params = {"symbol": symbol} if symbol else None
+    if action == "pairs_summary":
+        params = {"symbol": symbol or "BTC"}
+    else:
+        params = None
+
     data = await request_with_fallback(client, endpoints[action], params)
+
+    if action == "coins_summary" and symbol and isinstance(data, list):
+        needle = symbol.upper()
+        data = next(
+            (
+                item
+                for item in data
+                if isinstance(item, dict)
+                and str(item.get("symbol", "")).upper() == needle
+            ),
+            {},
+        )
 
     return ok(
         action,
@@ -707,9 +747,9 @@ async def coinglass_oi_history(
     """
     check_interval(ctx, interval)
     check_params(action, symbol=symbol, exchange=exchange, pair=pair)
-    if action == "coin_margin" and not exchange:
+    if action in {"coin_margin", "stablecoin"} and not exchange:
         raise ValueError(
-            "Action 'coin_margin' requires exchange list via exchange "
+            f"Action '{action}' requires exchange list via exchange "
             "(e.g., exchange='Binance,OKX')"
         )
     client = get_client(ctx)
@@ -915,10 +955,16 @@ async def coinglass_funding_current(
         ),
     ],
     symbol: Annotated[
-        str | None, Field(description="Filter by coin (e.g., 'BTC')")
+        str | None, Field(description="Legacy coin filter (not used by v4 rates endpoint)")
     ] = None,
     range: Annotated[
         Optional[str], Field(description="Time range for accumulated funding (e.g., 24h, 7d)")
+    ] = None,
+    usd: Annotated[
+        int | None, Field(description="Required for arbitrage action")
+    ] = None,
+    exchange_list: Annotated[
+        str | None, Field(description="Optional exchanges for arbitrage action")
     ] = None,
     ctx: Context = None,
 ) -> dict:
@@ -945,11 +991,18 @@ async def coinglass_funding_current(
         raise ValueError(
             "Action 'accumulated' requires range (e.g., '7d' or '30d')."
         )
+    if action == "arbitrage" and usd is None:
+        raise ValueError("Action 'arbitrage' requires usd (e.g., usd=10000).")
 
-    params = {"range": range} if action == "accumulated" else {"symbol": symbol}
+    if action == "rates":
+        params = None
+    elif action == "accumulated":
+        params = {"range": range}
+    else:
+        params = {"usd": usd, "exchange_list": exchange_list}
     data = await client.request(endpoints[action], params)
 
-    return ok(action, data, symbol=symbol, range=range)
+    return ok(action, data, symbol=symbol, range=range, usd=usd, exchange_list=exchange_list)
 
 
 # ============================================================================
@@ -1024,13 +1077,20 @@ async def coinglass_long_short(
         "global": "/api/futures/global-long-short-account-ratio/history",
         "top_accounts": "/api/futures/top-long-short-account-ratio/history",
         "top_positions": "/api/futures/top-long-short-position-ratio/history",
-        "taker_ratio": "/api/futures/taker-buy-sell-volume/exchange-list",
+        "taker_ratio": ENDPOINT_FUTURES_AGGREGATED_TAKER_RATIO_HISTORY,
         "net_position": "/api/futures/net-position/history",
         "net_position_v2": "/api/futures/v2/net-position/history",
     }
 
     if action == "taker_ratio":
-        params = {"symbol": pair, "range": "24h"}
+        params = {
+            "exchange": exchange,
+            "symbol": pair,
+            "interval": interval,
+            "limit": limit,
+            "startTime": start_time,
+            "endTime": end_time,
+        }
     elif action in {"net_position", "net_position_v2"}:
         params = {
             "exchange": exchange,
@@ -1128,6 +1188,8 @@ async def coinglass_liq_history(
         )
     if action == "aggregated" and not symbol:
         raise ValueError("Action 'aggregated' requires symbol (e.g., symbol='BTC').")
+    if action == "by_coin" and not exchange:
+        raise ValueError("Action 'by_coin' requires exchange (e.g., exchange='Binance').")
     client = get_client(ctx)
 
     endpoints = {
@@ -1159,6 +1221,8 @@ async def coinglass_liq_history(
         params = {"range": range or "24h", "symbol": symbol}
     elif action == "max_pain":
         params = {"range": range}
+    elif action == "by_coin":
+        params = {"exchange": exchange}
     else:
         params = {}
 
@@ -1375,6 +1439,11 @@ async def coinglass_ob_history(
         )
     if action == "coin_depth" and not symbol:
         raise ValueError("Action 'coin_depth' requires symbol (e.g., symbol='BTC').")
+    if action == "heatmap" and (not exchange or not (pair or symbol)):
+        raise ValueError(
+            "Action 'heatmap' requires exchange + symbol/pair "
+            "(e.g., exchange='Binance', pair='BTCUSDT')."
+        )
     client = get_client(ctx)
 
     endpoints = {
@@ -1404,9 +1473,9 @@ async def coinglass_ob_history(
         }
     else:
         params = {
-            "symbol": symbol,
+            "exchange": exchange,
+            "symbol": pair or symbol,
             "interval": interval,
-            "range": range,
             "limit": limit,
         }
 
@@ -1492,6 +1561,7 @@ async def coinglass_ob_large_orders(
     CoinGlass `order_side` semantics for large-limit-order payloads:
     - 1 = ask/sell
     - 2 = bid/buy
+    This is counter-intuitive versus common BUY=1 conventions.
 
     Examples:
         - Current whale walls: action="current"
@@ -1500,9 +1570,12 @@ async def coinglass_ob_large_orders(
     client = get_client(ctx)
 
     if action == "current":
-        resolved_symbol = await resolve_instrument_id(client, exchange, symbol or pair)
+        current_symbol = symbol or pair
+        if not exchange or not current_symbol:
+            raise ValueError("Action 'current' requires exchange + symbol/pair.")
+        resolved_symbol = await resolve_instrument_id(client, exchange, current_symbol)
         endpoint = "/api/futures/orderbook/large-limit-order"
-        params = {"exchange": exchange, "symbol": resolved_symbol, "limit": limit}
+        params = {"exchange": exchange, "symbol": resolved_symbol}
     elif action == "history":
         history_symbol = symbol or pair
         missing: list[str] = []
@@ -1531,6 +1604,8 @@ async def coinglass_ob_large_orders(
             "limit": limit,
         }
     elif action == "large_orders":
+        if not exchanges or not (symbol or pair):
+            raise ValueError("Action 'large_orders' requires exchanges + symbol/pair.")
         endpoint = "/api/large-orders"
         params = {
             "exchanges": exchanges,
@@ -1541,6 +1616,10 @@ async def coinglass_ob_large_orders(
             "limit": limit,
         }
     elif action == "legacy_current":
+        if not (ex_name or exchange) or not (symbol or pair):
+            raise ValueError(
+                "Action 'legacy_current' requires ex_name/exchange + symbol/pair."
+            )
         endpoint = "/api/orderbook/large-limit-order-"
         params = {
             "exName": ex_name or exchange,
@@ -1548,6 +1627,10 @@ async def coinglass_ob_large_orders(
             "type": market_type or "futures",
         }
     else:  # legacy_history
+        if not (ex_name or exchange) or not (symbol or pair):
+            raise ValueError(
+                "Action 'legacy_history' requires ex_name/exchange + symbol/pair."
+            )
         endpoint = "/api/orderbook/large-limit-order-history-"
         params = {
             "exName": ex_name or exchange,
@@ -1633,7 +1716,14 @@ async def coinglass_whale_positions(
         "all_positions": "/api/hyperliquid/position",
     }
 
-    params = {} if action == "alerts" else {"symbol": symbol, "user": user, "page": page}
+    if action == "alerts":
+        params = None
+    elif action == "positions":
+        params = None
+    else:
+        if not symbol:
+            raise ValueError("Action 'all_positions' requires symbol (e.g., symbol='BTC').")
+        params = {"symbol": symbol, "current_page": str(page)}
     data = await client.request(endpoints[action], params)
 
     return ok(action, data, symbol=symbol, page=page)
@@ -1757,7 +1847,7 @@ async def coinglass_taker(
             "pair_history": "/api/futures/v2/taker-buy-sell-volume/history",
             "coin_history": "/api/futures/aggregated-taker-buy-sell-volume/history",
             "by_exchange": "/api/futures/taker-buy-sell-volume/exchange-list",
-            "aggregated_ratio": "/api/futures/aggregated-taker-buy-sell-volume/history",
+            "aggregated_ratio": ENDPOINT_FUTURES_AGGREGATED_TAKER_RATIO_HISTORY,
         }
     else:
         endpoints = {
@@ -1766,6 +1856,8 @@ async def coinglass_taker(
         }
 
     if action == "pair_history":
+        if not exchange or not pair:
+            raise ValueError("Action 'pair_history' requires exchange + pair.")
         params = {
             "exchange": exchange,
             "symbol": pair,
@@ -1773,6 +1865,8 @@ async def coinglass_taker(
             "limit": limit,
         }
     elif action == "coin_history":
+        if not symbol:
+            raise ValueError("Action 'coin_history' requires symbol.")
         default_exchange_list = (
             "Binance,OKX,Bybit,dYdX,Bitget,Huobi,Gate,CoinEx,Kraken,BingX"
             if market == "futures"
@@ -1787,19 +1881,25 @@ async def coinglass_taker(
     elif action == "by_exchange":
         if market != "futures":
             raise ValueError("Action 'by_exchange' is only available for futures market")
+        if not symbol:
+            raise ValueError("Action 'by_exchange' requires symbol.")
         params = {"symbol": symbol, "range": range or "24h"}
     elif action == "aggregated_ratio":
         if market != "futures":
             raise ValueError(
                 "Action 'aggregated_ratio' is only available for futures market"
             )
+        if not exchange or not symbol:
+            raise ValueError(
+                "Action 'aggregated_ratio' requires exchange + symbol for futures market."
+            )
         params = {
-            "exchange_list": exchange_list or exchange or "Binance",
+            "exchange": exchange,
             "symbol": symbol,
             "interval": interval,
             "limit": limit,
-            "start_time": start_time,
-            "end_time": end_time,
+            "startTime": start_time,
+            "endTime": end_time,
         }
     else:
         raise ValueError(f"Unsupported action '{action}' for market '{market}'")
@@ -1933,6 +2033,10 @@ async def coinglass_spot(
     if action == "price_history":
         price_interval = interval or "h1"
         check_interval(ctx, price_interval)
+        if not exchange or not (pair or symbol):
+            raise ValueError(
+                "Action 'price_history' requires exchange + pair/symbol."
+            )
         params = {
             "exchange": exchange,
             "symbol": pair or symbol,
@@ -1945,6 +2049,10 @@ async def coinglass_spot(
     elif action == "taker_history":
         taker_interval = interval or "h1"
         check_interval(ctx, taker_interval)
+        if not exchange or not (pair or symbol):
+            raise ValueError(
+                "Action 'taker_history' requires exchange + pair/symbol."
+            )
         params = {
             "exchange": exchange,
             "symbol": pair or symbol,
@@ -1957,6 +2065,10 @@ async def coinglass_spot(
     elif action == "taker_aggregated_history":
         taker_interval = interval or "h1"
         check_interval(ctx, taker_interval)
+        if not symbol:
+            raise ValueError(
+                "Action 'taker_aggregated_history' requires symbol (e.g., BTCUSDT)."
+            )
         params = {
             "symbol": symbol,
             "interval": taker_interval,
@@ -1972,6 +2084,10 @@ async def coinglass_spot(
     elif action == "orderbook_aggregated_ask_bids_history":
         orderbook_interval = interval or "h1"
         check_interval(ctx, orderbook_interval)
+        if not symbol:
+            raise ValueError(
+                "Action 'orderbook_aggregated_ask_bids_history' requires symbol."
+            )
         params = {
             "exchange_list": (
                 exchange_list
@@ -1988,6 +2104,10 @@ async def coinglass_spot(
     elif action == "orderbook_ask_bids_history":
         orderbook_interval = interval or "h1"
         check_interval(ctx, orderbook_interval)
+        if not exchange or not (pair or symbol):
+            raise ValueError(
+                "Action 'orderbook_ask_bids_history' requires exchange + pair/symbol."
+            )
         params = {
             "exchange": exchange,
             "symbol": pair or symbol,
@@ -2001,6 +2121,10 @@ async def coinglass_spot(
     elif action == "orderbook_history":
         orderbook_interval = interval or "h1"
         check_interval(ctx, orderbook_interval)
+        if not exchange or not (pair or symbol):
+            raise ValueError(
+                "Action 'orderbook_history' requires exchange + pair/symbol."
+            )
         params = {
             "exchange": exchange,
             "symbol": pair or symbol,
@@ -2011,8 +2135,20 @@ async def coinglass_spot(
         }
         interval = orderbook_interval
     elif action == "orderbook_large_limit_order":
+        if not exchange or not (pair or symbol):
+            raise ValueError(
+                "Action 'orderbook_large_limit_order' requires exchange + pair/symbol."
+            )
         params = {"exchange": exchange, "symbol": pair or symbol}
     elif action == "orderbook_large_limit_order_history":
+        if not exchange or not (pair or symbol):
+            raise ValueError(
+                "Action 'orderbook_large_limit_order_history' requires exchange + pair/symbol."
+            )
+        if start_time is None or end_time is None or state is None:
+            raise ValueError(
+                "Action 'orderbook_large_limit_order_history' requires start_time, end_time, and state."
+            )
         params = {
             "exchange": exchange,
             "symbol": pair or symbol,
@@ -2023,6 +2159,8 @@ async def coinglass_spot(
     elif action == "volume_footprint_history":
         params = None
     elif action == "pairs_markets":
+        if not symbol:
+            raise ValueError("Action 'pairs_markets' requires symbol.")
         params = {"symbol": symbol}
     else:
         params = {}
@@ -2098,16 +2236,21 @@ async def coinglass_options(
         "volume_history": "/api/option/exchange-vol-history",
     }
 
-    if action == "oi_history" and not unit:
-        raise ValueError("Action 'oi_history' requires unit.")
+    if action == "max_pain" and not exchange:
+        raise ValueError("Action 'max_pain' requires exchange (e.g., exchange='Deribit').")
+    if action == "oi_history" and (not unit or not range):
+        raise ValueError("Action 'oi_history' requires unit + range.")
+    if action == "volume_history" and not unit:
+        raise ValueError("Action 'volume_history' requires unit.")
 
-    params = {"symbol": symbol}
     if action == "max_pain":
-        params["exchange"] = exchange
-    if action == "oi_history":
-        params["unit"] = unit
-    if range:
-        params["range"] = range
+        params = {"symbol": symbol, "exchange": exchange}
+    elif action == "info":
+        params = {"symbol": symbol}
+    elif action == "oi_history":
+        params = {"symbol": symbol, "unit": unit, "range": range}
+    else:
+        params = {"symbol": symbol, "unit": unit}
 
     data = await client.request(endpoints[action], params)
 
@@ -2161,6 +2304,15 @@ async def coinglass_onchain(
         Literal["inflow", "outflow", "internal"] | None,
         Field(description="Filter transfers by type"),
     ] = None,
+    min_usd: Annotated[
+        float | None, Field(description="Minimum USD threshold for transfers")
+    ] = None,
+    per_page: Annotated[
+        int | None, Field(ge=1, description="Items per page")
+    ] = None,
+    page: Annotated[
+        int | None, Field(ge=1, description="Page number")
+    ] = None,
     start_time: Annotated[
         int | None, Field(description="Start timestamp in milliseconds")
     ] = None,
@@ -2184,10 +2336,7 @@ async def coinglass_onchain(
         - Balance history: action="balance_chart", asset="BTC", exchange="Binance"
     """
     client = get_client(ctx)
-    if action == "balance_list" and not symbol:
-        raise ValueError(
-            "Action 'balance_list' requires symbol (e.g., symbol='BTC')."
-        )
+    base_symbol = symbol or asset
 
     endpoints = {
         "assets": "/api/exchange/assets",
@@ -2198,24 +2347,42 @@ async def coinglass_onchain(
         "assets_transparency": "/api/exchange_assets_transparency/list",
     }
 
-    params = {
-        "exchange": exchange,
-        "asset": asset,
-        "range": range,
-        "type": transfer_type,
-        "limit": limit,
-        "symbol": (
-            symbol
-            if action in {"assets", "balance_list"}
-            else (symbol or asset) if action == "whale_transfer" else None
-        ),
-        "start_time": start_time if action == "whale_transfer" else None,
-        "end_time": end_time if action == "whale_transfer" else None,
-    }
+    if action == "assets":
+        if not exchange:
+            raise ValueError("Action 'assets' requires exchange.")
+        params = {
+            "exchange": exchange,
+            "per_page": str(per_page) if per_page is not None else None,
+            "page": str(page) if page is not None else None,
+        }
+    elif action == "balance_list":
+        if not base_symbol:
+            raise ValueError("Action 'balance_list' requires symbol.")
+        params = {"symbol": base_symbol}
+    elif action == "balance_chart":
+        if not base_symbol:
+            raise ValueError("Action 'balance_chart' requires symbol.")
+        params = {"symbol": base_symbol}
+    elif action == "transfers":
+        params = {
+            "symbol": base_symbol,
+            "start_time": start_time,
+            "min_usd": min_usd,
+            "per_page": per_page,
+            "page": page,
+        }
+    elif action == "whale_transfer":
+        params = {
+            "symbol": base_symbol,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+    else:
+        params = None
 
     data = await client.request(endpoints[action], params)
 
-    return ok(action, data, exchange=exchange, asset=asset, symbol=symbol)
+    return ok(action, data, exchange=exchange, asset=asset, symbol=base_symbol)
 
 
 # ============================================================================
@@ -2297,20 +2464,26 @@ async def coinglass_etf(
     """
     client = get_client(ctx)
 
-    if action in {"premium", "detail", "price", "bitcoin_premium_discount", "bitcoin_detail", "bitcoin_price"} and not ticker:
-        raise ValueError(
-            f"Action '{action}' requires ticker parameter (e.g., ticker='IBIT')"
-        )
-
-    base = "/api/etf/bitcoin" if asset == "bitcoin" else "/api/etf/ethereum"
-    endpoints: dict[ActionETF, str | list[str]] = {
-        "list": f"{base}/list",
-        "flows": f"{base}/flow-history",
-        "history": f"{base}/history",
-        "net_assets": f"{base}/net-assets/history",
-        "premium": f"{base}/premium-discount/history",
-        "detail": f"{base}/detail",
-        "price": f"{base}/price/history",
+    endpoints: dict[ActionETF, str] = {
+        "list": (
+            "/api/etf/bitcoin/list"
+            if asset == "bitcoin"
+            else "/api/etf/ethereum/list"
+        ),
+        "flows": (
+            "/api/etf/bitcoin/flow-history"
+            if asset == "bitcoin"
+            else "/api/etf/ethereum/flow-history"
+        ),
+        "history": "/api/etf/bitcoin/history",
+        "net_assets": (
+            "/api/etf/bitcoin/net-assets/history"
+            if asset == "bitcoin"
+            else "/api/etf/ethereum/net-assets/history"
+        ),
+        "premium": "/api/etf/bitcoin/premium-discount/history",
+        "detail": "/api/etf/bitcoin/detail",
+        "price": "/api/etf/bitcoin/price/history",
         "bitcoin_list": "/api/etf/bitcoin/list",
         "bitcoin_flows": "/api/etf/bitcoin/flow-history",
         "bitcoin_history": "/api/etf/bitcoin/history",
@@ -2353,25 +2526,37 @@ async def coinglass_etf(
     else:
         asset_value = asset
 
-    no_param_actions = {
+    if asset == "ethereum" and action in {"history", "premium", "detail", "price"}:
+        raise ValueError(f"Action '{action}' is only available for asset='bitcoin'.")
+
+    if action in {"history", "bitcoin_history", "detail", "bitcoin_detail"} and not ticker:
+        raise ValueError(f"Action '{action}' requires ticker (e.g., ticker='IBIT').")
+    if action in {"price", "bitcoin_price"} and (not ticker or not range):
+        raise ValueError(f"Action '{action}' requires ticker + range.")
+
+    if action in {
+        "list",
+        "flows",
+        "bitcoin_list",
+        "bitcoin_flows",
         "ethereum_list",
         "ethereum_flows",
         "ethereum_net_assets",
         "solana_flows",
         "xrp_flows",
         "hk_bitcoin_flows",
-    }
-
-    if action in no_param_actions:
+    }:
         params = None
+    elif action in {"history", "bitcoin_history", "detail", "bitcoin_detail"}:
+        params = {"ticker": ticker}
+    elif action in {"price", "bitcoin_price"}:
+        params = {"ticker": ticker, "range": range}
+    elif action in {"premium", "bitcoin_premium_discount", "bitcoin_net_assets"}:
+        params = {"ticker": ticker}
+    elif action == "net_assets":
+        params = {"ticker": ticker} if asset == "bitcoin" else None
     else:
-        params = {
-            "ticker": ticker,
-            "region": region,
-            "range": range or ("7d" if action in {"price", "bitcoin_price"} else None),
-            "interval": interval,
-            "limit": limit,
-        }
+        params = None
 
     data = await request_with_fallback(client, endpoints[action], params)
 
@@ -2424,7 +2609,10 @@ async def coinglass_grayscale(
         "premium": "/api/grayscale/premium-history",
     }
 
-    params = {"fund": fund, "symbol": symbol if action == "premium" else None, "range": range}
+    if action == "premium" and not symbol:
+        raise ValueError("Action 'premium' requires symbol (e.g., symbol='BTC').")
+
+    params = {"symbol": symbol} if action == "premium" else None
     data = await request_with_fallback(client, endpoints[action], params)
 
     return ok(action, data, fund=fund, symbol=symbol, range=range)
@@ -2558,7 +2746,7 @@ async def coinglass_indicators(
     """
     client = get_client(ctx)
 
-    endpoints: dict[ActionIndicators, str | list[str]] = {
+    endpoints: dict[ActionIndicators, str] = {
         "rsi": "/api/futures/rsi/list",
         "futures_rsi": "/api/futures/indicators/rsi",
         "futures_ma": "/api/futures/indicators/ma",
@@ -2600,27 +2788,57 @@ async def coinglass_indicators(
         "bull_peak": "/api/bull-market-peak-indicator",
         "borrow_rate": "/api/borrow-interest-rate/history",
         "whale_index": "/api/futures/whale-index/history",
-        "cdri_index": [
-            "/api/futures/cdri-index/history",
-            "/api/futures/cdri-index/history ",
-        ],
-        "cgdi_index": [
-            "/api/futures/cgdi-index/history",
-            "/api/futures/cgdi-index/history  ",
-        ],
+        "cdri_index": ENDPOINT_CDRI_INDEX_HISTORY,
+        "cgdi_index": ENDPOINT_CGDI_INDEX_HISTORY,
     }
 
-    if action in {
+    futures_indicator_actions = {
         "futures_rsi",
         "futures_ma",
         "futures_ema",
         "futures_macd",
         "futures_boll",
-    }:
+    }
+    base_series_params = {
+        "exchange": exchange,
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit,
+        "start_time": start_time,
+        "end_time": end_time,
+    }
+
+    if action in futures_indicator_actions:
         if not exchange or not symbol or not interval:
             raise ValueError(
                 f"Action '{action}' requires exchange + symbol + interval "
                 "(e.g., exchange='Binance', symbol='BTCUSDT', interval='h1')"
+            )
+        if action in {"futures_rsi", "futures_ma", "futures_ema"}:
+            params = {
+                **base_series_params,
+                "window": window,
+                "series_type": series_type,
+            }
+        elif action == "futures_macd":
+            params = {
+                **base_series_params,
+                "series_type": series_type,
+                "fast_window": fast_window,
+                "slow_window": slow_window,
+                "signal_window": signal_window,
+            }
+        else:
+            params = {
+                **base_series_params,
+                "series_type": series_type,
+                "window": window,
+                "mult": mult,
+            }
+    elif action in {"basis", "borrow_rate", "whale_index"}:
+        if not exchange or not symbol or not interval:
+            raise ValueError(
+                f"Action '{action}' requires exchange + symbol + interval."
             )
         params = {
             "exchange": exchange,
@@ -2629,23 +2847,22 @@ async def coinglass_indicators(
             "limit": limit,
             "start_time": start_time,
             "end_time": end_time,
-            "series_type": series_type,
-            "window": window,
-            "mult": mult,
-            "fast_window": fast_window,
-            "slow_window": slow_window,
-            "signal_window": signal_window,
+        }
+    elif action == "coinbase_premium":
+        if not interval:
+            raise ValueError("Action 'coinbase_premium' requires interval.")
+        params = {
+            "interval": interval,
+            "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
         }
     elif action in {"cdri_index", "cgdi_index"}:
         params = None
+    elif action == "rsi":
+        params = None
     else:
-        params = {
-            "symbol": symbol,
-            "exchange": exchange,
-            "interval": interval,
-            "range": range,
-            "limit": limit,
-        }
+        params = None
 
     data = await request_with_fallback(client, endpoints[action], params)
 
