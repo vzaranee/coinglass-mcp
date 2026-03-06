@@ -1,0 +1,14 @@
+services:
+  coinglass-mcp:
+    build: .
+    ports:
+      - "8100:8100"
+    environment:
+      COINGLASS_API_KEY: ${COINGLASS_API_KEY}
+      COINGLASS_PLAN: ${COINGLASS_PLAN:-professional}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/sse')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

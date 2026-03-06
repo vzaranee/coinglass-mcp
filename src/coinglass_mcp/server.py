@@ -64,18 +64,20 @@ mcp = FastMCP(
     name="coinglass",
     instructions="""CoinGlass MCP - cryptocurrency derivatives analytics.
 
-Access 80+ API endpoints for crypto market data including:
-- Open Interest, Funding Rates, Liquidations
-- Whale tracking, ETF flows, Market indicators
+26 tools wrapping 143 CoinGlass API v4 endpoints. All responses are formatted
+(raw JSON compressed to ~1-3KB structured summaries).
 
-Common patterns:
+Quick start:
 - Market overview: coinglass_market_data(action="coins_summary")
-- BTC open interest: coinglass_oi_history(action="aggregated", symbol="BTC")
-- Funding rates: coinglass_funding_current(action="rates")
-- Liquidations: coinglass_liq_history(action="aggregated", symbol="BTC")
-- Whale activity: coinglass_whale_positions(action="positions")
+- OI by exchange: coinglass_oi_distribution(action="by_exchange", symbol="ETH")
+- Funding rates: coinglass_funding_current(action="rates", symbol="BTC")
+- Liquidation heatmap: coinglass_liq_heatmap(action="pair_heatmap", symbol="SOL")
+- Whale positions: coinglass_whale_positions(action="positions", symbol="ETH")
+- ETF flows: coinglass_etf(action="bitcoin_flows")
+- Fear & Greed: coinglass_indicators(action="fear_greed")
+- Arbitrage: coinglass_funding_current(action="arbitrage")
 
-Use coinglass_search(query="...") to discover available operations.""",
+Use coinglass_search(query="...") to discover tools by keyword.""",
     lifespan=lifespan,
 )
 
@@ -3155,8 +3157,40 @@ async def coinglass_config(
 
 
 def main():
-    """Run the CoinGlass MCP server."""
-    mcp.run()
+    """Run the CoinGlass MCP server.
+
+    Usage:
+        coinglass-mcp                          # stdio (Claude Desktop)
+        coinglass-mcp --transport sse          # SSE on port 8000
+        coinglass-mcp --transport sse --port 8100  # SSE on custom port
+        coinglass-mcp --transport sse --host 0.0.0.0 --port 8100  # public
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(description="CoinGlass MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport type (default: stdio)",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Host to bind SSE server (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8000,
+        help="Port for SSE server (default: 8000)",
+    )
+    args = parser.parse_args()
+
+    if args.transport == "sse":
+        mcp.run(transport="sse", host=args.host, port=args.port)
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
