@@ -1205,7 +1205,13 @@ async def coinglass_ob_history(
     return ok(action, data, symbol=symbol or pair, interval=interval, range=range)
 
 
-ActionLargeOrders = Literal["current", "history"]
+ActionLargeOrders = Literal[
+    "current",
+    "history",
+    "large_orders",
+    "legacy_current",
+    "legacy_history",
+]
 
 
 @mcp.tool(
@@ -1221,14 +1227,51 @@ ActionLargeOrders = Literal["current", "history"]
 async def coinglass_ob_large_orders(
     action: Annotated[
         ActionLargeOrders,
-        Field(description="current: active large orders | history: historical"),
+        Field(
+            description=(
+                "current: futures active large orders | history: futures large-order history "
+                "| large_orders: cross-market large orders "
+                "| legacy_current: /api/orderbook/large-limit-order- "
+                "| legacy_history: /api/orderbook/large-limit-order-history-"
+            )
+        ),
     ],
     exchange: Annotated[
         str | None, Field(description="Filter by exchange")
     ] = None,
     pair: Annotated[str | None, Field(description="Filter by pair")] = None,
+    symbol: Annotated[
+        str | None,
+        Field(description="Symbol for large_orders/legacy_* actions (coin or pair)"),
+    ] = None,
+    exchanges: Annotated[
+        str | None,
+        Field(
+            description="Comma-separated exchanges for large_orders (e.g., Binance,OKX)"
+        ),
+    ] = None,
+    ex_name: Annotated[
+        str | None,
+        Field(description="Exchange name for legacy_* actions (maps to exName)"),
+    ] = None,
+    market_type: Annotated[
+        Literal["futures", "spot"] | None,
+        Field(description="Market type for large_orders/legacy_* (maps to type)"),
+    ] = None,
+    start_time: Annotated[
+        int | None,
+        Field(description="Start timestamp (ms for large_orders; seconds for legacy_history)"),
+    ] = None,
+    end_time: Annotated[
+        int | None,
+        Field(description="End timestamp (ms for large_orders; seconds for legacy_history)"),
+    ] = None,
+    state: Annotated[
+        int | None,
+        Field(description="Order state for history endpoints (1 in-progress, 2 finish, 3 revoke)"),
+    ] = None,
     limit: Annotated[
-        int, Field(ge=1, le=100, description="Number of orders")
+        int, Field(ge=1, le=1000, description="Number of orders")
     ] = 50,
     ctx: Context = None,
 ) -> dict:
@@ -1243,16 +1286,65 @@ async def coinglass_ob_large_orders(
     """
     client = get_client(ctx)
 
-    endpoint = (
-        "/api/futures/orderbook/large-limit-order"
-        if action == "current"
-        else "/api/futures/orderbook/large-limit-order-history"
-    )
+    if action == "current":
+        endpoint = "/api/futures/orderbook/large-limit-order"
+        params = {"exchange": exchange, "symbol": pair, "limit": limit}
+    elif action == "history":
+        endpoint = "/api/futures/orderbook/large-limit-order-history"
+        params = {
+            "exchange": exchange,
+            "symbol": pair,
+            "state": state,
+            "start_time": start_time,
+            "end_time": end_time,
+            "limit": limit,
+        }
+    elif action == "large_orders":
+        endpoint = "/api/large-orders"
+        params = {
+            "exchanges": exchanges,
+            "symbol": symbol or pair,
+            "type": market_type or "futures",
+            "startTime": start_time,
+            "endTime": end_time,
+            "limit": limit,
+        }
+    elif action == "legacy_current":
+        endpoint = "/api/orderbook/large-limit-order-"
+        params = {
+            "exName": ex_name or exchange,
+            "symbol": symbol or pair,
+            "type": market_type or "futures",
+        }
+    else:  # legacy_history
+        endpoint = "/api/orderbook/large-limit-order-history-"
+        params = {
+            "exName": ex_name or exchange,
+            "symbol": symbol or pair,
+            "type": market_type or "futures",
+            "state": state,
+            "limit": limit,
+            "startTime": start_time,
+            "endTime": end_time,
+        }
 
-    params = {"exchange": exchange, "symbol": pair, "limit": limit}
     data = await client.request(endpoint, params)
 
-    return ok(action, data, exchange=exchange, pair=pair)
+    return ok(
+        action,
+        data,
+        exchange=exchange or ex_name,
+        pair=pair or symbol,
+        exchanges=exchanges,
+        type=(
+            market_type
+            or (
+                "futures"
+                if action in {"large_orders", "legacy_current", "legacy_history"}
+                else None
+            )
+        ),
+    )
 
 
 # ============================================================================
@@ -1506,6 +1598,12 @@ ActionSpot = Literal[
     "price_history",
     "taker_history",
     "taker_aggregated_history",
+    "orderbook_aggregated_ask_bids_history",
+    "orderbook_ask_bids_history",
+    "orderbook_history",
+    "orderbook_large_limit_order",
+    "orderbook_large_limit_order_history",
+    "volume_footprint_history",
 ]
 
 
@@ -1523,7 +1621,18 @@ async def coinglass_spot(
     action: Annotated[
         ActionSpot,
         Field(
-            description="coins: supported coins | pairs: exchange pairs | coins_markets: coin data | pairs_markets: pair data | price_history: OHLC | taker_history: pair taker volume | taker_aggregated_history: aggregated taker volume"
+            description=(
+                "coins: supported coins | pairs: exchange pairs | coins_markets: coin data "
+                "| pairs_markets: pair data | price_history: OHLC "
+                "| taker_history: pair taker volume "
+                "| taker_aggregated_history: aggregated taker volume "
+                "| orderbook_aggregated_ask_bids_history: aggregated spot depth history "
+                "| orderbook_ask_bids_history: pair spot depth history "
+                "| orderbook_history: spot orderbook heatmap history "
+                "| orderbook_large_limit_order: active spot large limit orders "
+                "| orderbook_large_limit_order_history: historical spot large limit orders "
+                "| volume_footprint_history: spot volume footprint history"
+            )
         ),
     ],
     symbol: Annotated[str | None, Field(description="Coin filter")] = None,
@@ -1535,6 +1644,20 @@ async def coinglass_spot(
     ] = None,
     interval: Annotated[
         str | None, Field(description="Interval for price/taker history: h1, h4, d1")
+    ] = None,
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp in milliseconds")
+    ] = None,
+    end_time: Annotated[
+        int | None, Field(description="End timestamp in milliseconds")
+    ] = None,
+    range: Annotated[
+        str | None,
+        Field(description="Orderbook depth range percentage (e.g., 0.5, 1, 2, 5)"),
+    ] = None,
+    state: Annotated[
+        int | str | None,
+        Field(description="Order status for orderbook_large_limit_order_history"),
     ] = None,
     exchange_list: Annotated[
         str | None,
@@ -1568,26 +1691,38 @@ async def coinglass_spot(
         "price_history": "/api/spot/price/history",
         "taker_history": "/api/spot/taker-buy-sell-volume/history",
         "taker_aggregated_history": "/api/spot/aggregated-taker-buy-sell-volume/history",
+        "orderbook_aggregated_ask_bids_history": "/api/spot/orderbook/aggregated-ask-bids-history",
+        "orderbook_ask_bids_history": "/api/spot/orderbook/ask-bids-history",
+        "orderbook_history": "/api/spot/orderbook/history",
+        "orderbook_large_limit_order": "/api/spot/orderbook/large-limit-order",
+        "orderbook_large_limit_order_history": "/api/spot/orderbook/large-limit-order-history",
+        "volume_footprint_history": "/api/spot/volume/footprint-history",
     }
 
     if action == "price_history":
-        if interval:
-            check_interval(ctx, interval)
+        price_interval = interval or "h1"
+        check_interval(ctx, price_interval)
         params = {
             "exchange": exchange,
-            "symbol": pair,
-            "interval": interval,
+            "symbol": pair or symbol,
+            "interval": price_interval,
             "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
         }
+        interval = price_interval
     elif action == "taker_history":
         taker_interval = interval or "h1"
         check_interval(ctx, taker_interval)
         params = {
             "exchange": exchange,
-            "symbol": pair,
+            "symbol": pair or symbol,
             "interval": taker_interval,
             "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
         }
+        interval = taker_interval
     elif action == "taker_aggregated_history":
         taker_interval = interval or "h1"
         check_interval(ctx, taker_interval)
@@ -1595,11 +1730,67 @@ async def coinglass_spot(
             "symbol": symbol,
             "interval": taker_interval,
             "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
             "exchange_list": (
                 exchange_list
                 or "Binance,OKX,Coinbase,Bybit,Kraken,Huobi,Gate,Bitfinex,KuCoin"
             ),
         }
+        interval = taker_interval
+    elif action == "orderbook_aggregated_ask_bids_history":
+        orderbook_interval = interval or "h1"
+        check_interval(ctx, orderbook_interval)
+        params = {
+            "exchange_list": (
+                exchange_list
+                or "Binance,OKX,Coinbase,Bybit,Kraken,Huobi,Gate,Bitfinex,KuCoin"
+            ),
+            "symbol": symbol,
+            "interval": orderbook_interval,
+            "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
+            "range": range,
+        }
+        interval = orderbook_interval
+    elif action == "orderbook_ask_bids_history":
+        orderbook_interval = interval or "h1"
+        check_interval(ctx, orderbook_interval)
+        params = {
+            "exchange": exchange,
+            "symbol": pair or symbol,
+            "interval": orderbook_interval,
+            "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
+            "range": range,
+        }
+        interval = orderbook_interval
+    elif action == "orderbook_history":
+        orderbook_interval = interval or "h1"
+        check_interval(ctx, orderbook_interval)
+        params = {
+            "exchange": exchange,
+            "symbol": pair or symbol,
+            "interval": orderbook_interval,
+            "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
+        }
+        interval = orderbook_interval
+    elif action == "orderbook_large_limit_order":
+        params = {"exchange": exchange, "symbol": pair or symbol}
+    elif action == "orderbook_large_limit_order_history":
+        params = {
+            "exchange": exchange,
+            "symbol": pair or symbol,
+            "start_time": start_time,
+            "end_time": end_time,
+            "state": state,
+        }
+    elif action == "volume_footprint_history":
+        params = None
     else:
         params = {}
 
@@ -1610,7 +1801,8 @@ async def coinglass_spot(
         data,
         symbol=symbol or pair,
         exchange=exchange,
-        interval=interval or ("h1" if "taker" in action else None),
+        interval=interval,
+        range=range,
     )
 
 
@@ -2280,7 +2472,13 @@ async def coinglass_search(
             "keywords": ["orderbook", "depth", "bid", "ask"],
         },
         "coinglass_ob_large_orders": {
-            "actions": ["current", "history"],
+            "actions": [
+                "current",
+                "history",
+                "large_orders",
+                "legacy_current",
+                "legacy_history",
+            ],
             "keywords": ["orderbook", "whale", "large", "orders", "walls"],
         },
         "coinglass_whale_positions": {
@@ -2304,6 +2502,12 @@ async def coinglass_search(
                 "price_history",
                 "taker_history",
                 "taker_aggregated_history",
+                "orderbook_aggregated_ask_bids_history",
+                "orderbook_ask_bids_history",
+                "orderbook_history",
+                "orderbook_large_limit_order",
+                "orderbook_large_limit_order_history",
+                "volume_footprint_history",
             ],
             "keywords": ["spot", "market"],
         },
