@@ -279,10 +279,7 @@ async def coinglass_market_data(
     endpoints: dict[ActionMarketData, str | list[str]] = {
         "coins_summary": "/api/futures/coins-markets",
         "pairs_summary": "/api/futures/pairs-markets",
-        "price_changes": [
-            "/api/futures/price-change-list",
-            "/futures/price-change-list",
-        ],
+        "price_changes": "/api/futures/coins-price-change",
     }
 
     params = {"symbol": symbol} if symbol else None
@@ -337,7 +334,7 @@ async def coinglass_price_history(
     client = get_client(ctx)
 
     data = await client.request(
-        "/api/price/ohlc-history",
+        "/api/futures/price/history",
         {
             "exchange": exchange,
             "symbol": pair,
@@ -419,10 +416,10 @@ async def coinglass_oi_history(
     client = get_client(ctx)
 
     endpoints = {
-        "pair": "/api/futures/openInterest/ohlc-history",
-        "aggregated": "/api/futures/openInterest/ohlc-aggregated-history",
-        "stablecoin": "/api/futures/openInterest/ohlc-aggregated-stablecoin",
-        "coin_margin": "/api/futures/openInterest/ohlc-aggregated-coin-margin-history",
+        "pair": "/api/futures/open-interest/history",
+        "aggregated": "/api/futures/open-interest/aggregated-history",
+        "stablecoin": "/api/futures/open-interest/aggregated-stablecoin-history",
+        "coin_margin": "/api/futures/open-interest/aggregated-coin-margin-history",
     }
 
     if action == "pair":
@@ -488,11 +485,11 @@ async def coinglass_oi_distribution(
 
     if action == "by_exchange":
         data = await client.request(
-            "/api/futures/openInterest/exchange-list", {"symbol": symbol}
+            "/api/futures/open-interest/exchange-list", {"symbol": symbol}
         )
     else:
         data = await client.request(
-            "/api/futures/openInterest/exchange-history-chart",
+            "/api/futures/open-interest/exchange-history-chart",
             {"symbol": symbol, "range": range},
         )
 
@@ -563,9 +560,9 @@ async def coinglass_funding_history(
     client = get_client(ctx)
 
     endpoints = {
-        "pair": "/api/futures/fundingRate/ohlc-history",
-        "oi_weighted": "/api/futures/fundingRate/oi-weight-ohlc-history",
-        "vol_weighted": "/api/futures/fundingRate/vol-weight-ohlc-history",
+        "pair": "/api/futures/funding-rate/history",
+        "oi_weighted": "/api/futures/funding-rate/oi-weight-history",
+        "vol_weighted": "/api/futures/funding-rate/vol-weight-history",
     }
 
     if action == "pair":
@@ -628,9 +625,9 @@ async def coinglass_funding_current(
     client = get_client(ctx)
 
     endpoints = {
-        "rates": "/api/futures/fundingRate/exchange-list",
-        "accumulated": "/api/futures/fundingRate/accumulated-exchange-list",
-        "arbitrage": "/api/futures/fundingRate/arbitrage",
+        "rates": "/api/futures/funding-rate/exchange-list",
+        "accumulated": "/api/futures/funding-rate/accumulated-exchange-list",
+        "arbitrage": "/api/futures/funding-rate/arbitrage",
     }
 
     params = {"symbol": symbol} if symbol else None
@@ -695,18 +692,9 @@ async def coinglass_long_short(
     client = get_client(ctx)
 
     endpoints: dict[ActionLS, str | list[str]] = {
-        "global": [
-            "/api/futures/globalLongShortAccountRatio/history",
-            "/api/futures/global-long-short-account-ratio/history",
-        ],
-        "top_accounts": [
-            "/api/futures/topLongShortAccountRatio/history",
-            "/api/futures/top-long-short-account-ratio/history",
-        ],
-        "top_positions": [
-            "/api/futures/topLongShortPositionRatio/history",
-            "/api/futures/top-long-short-position-ratio/history",
-        ],
+        "global": "/api/futures/global-long-short-account-ratio/history",
+        "top_accounts": "/api/futures/top-long-short-account-ratio/history",
+        "top_positions": "/api/futures/top-long-short-position-ratio/history",
         "taker_ratio": "/api/futures/taker-buy-sell-volume/exchange-list",
     }
 
@@ -911,9 +899,20 @@ async def coinglass_liq_heatmap(
         raise ValueError("Coin heatmap/map actions require symbol (e.g., symbol='BTC')")
     client = get_client(ctx)
 
+    pair_heatmap_endpoints = {
+        1: "/api/futures/liquidation/heatmap/model1",
+        2: "/api/futures/liquidation/heatmap/model2",
+        3: "/api/futures/liquidation/heatmap/model3",
+    }
+    coin_heatmap_endpoints = {
+        1: "/api/futures/liquidation/aggregated-heatmap/model1",
+        2: "/api/futures/liquidation/aggregated-heatmap/model2",
+        3: "/api/futures/liquidation/aggregated-heatmap/model3",
+    }
+
     endpoints = {
-        "pair_heatmap": f"/api/futures/liquidation/heatmap/model{model}",
-        "coin_heatmap": f"/api/futures/liquidation/aggregated-heatmap/model{model}",
+        "pair_heatmap": pair_heatmap_endpoints[model],
+        "coin_heatmap": coin_heatmap_endpoints[model],
         "pair_map": "/api/futures/liquidation/map",
         "coin_map": "/api/futures/liquidation/aggregated-map",
     }
@@ -1227,21 +1226,14 @@ async def coinglass_taker(
 
     if market == "futures":
         endpoints: dict[ActionTaker, str | list[str]] = {
-            "pair_history": "/api/futures/taker-buy-sell-volume/history",
-            "coin_history": [
-                "/api/futures/taker-buy-sell-volume/aggregated-history",
-                "/api/futures/aggregated-taker-buy-sell-volume/history",
-            ],
+            "pair_history": "/api/futures/v2/taker-buy-sell-volume/history",
+            "coin_history": "/api/futures/aggregated-taker-buy-sell-volume/history",
             "by_exchange": "/api/futures/taker-buy-sell-volume/exchange-list",
         }
     else:
         endpoints = {
             "pair_history": "/api/spot/taker-buy-sell-volume/history",
-            "coin_history": [
-                "/api/spot/taker-buy-sell-volume/aggregated-history",
-                "/api/spot/aggregated-taker-buy-sell-volume/history",
-            ],
-            "by_exchange": "/api/spot/taker-buy-sell-volume/exchange-list",
+            "coin_history": "/api/spot/aggregated-taker-buy-sell-volume/history",
         }
 
     if action == "pair_history":
@@ -1352,12 +1344,9 @@ async def coinglass_spot(
         "pairs": "/api/spot/supported-exchange-pairs",
         "coins_markets": "/api/spot/coins-markets",
         "pairs_markets": "/api/spot/pairs-markets",
-        "price_history": "/api/price/ohlc-history",
+        "price_history": "/api/spot/price/history",
         "taker_history": "/api/spot/taker-buy-sell-volume/history",
-        "taker_aggregated_history": [
-            "/api/spot/taker-buy-sell-volume/aggregated-history",
-            "/api/spot/aggregated-taker-buy-sell-volume/history",
-        ],
+        "taker_aggregated_history": "/api/spot/aggregated-taker-buy-sell-volume/history",
     }
 
     if action == "price_history":
@@ -1617,22 +1606,22 @@ async def coinglass_etf(
             f"Action '{action}' requires ticker parameter (e.g., ticker='IBIT')"
         )
 
-    base = f"/api/etf/{asset}"
+    base = "/api/etf/bitcoin" if asset == "bitcoin" else "/api/etf/ethereum"
     endpoints: dict[ActionETF, str | list[str]] = {
         "list": f"{base}/list",
-        "flows": [f"{base}/flows", f"{base}/flow-history"],
+        "flows": f"{base}/flow-history",
         "history": f"{base}/history",
-        "net_assets": [f"{base}/net-assets", f"{base}/net-assets/history"],
-        "premium": [f"{base}/premium-discount", f"{base}/premium-discount/history"],
+        "net_assets": f"{base}/net-assets/history",
+        "premium": f"{base}/premium-discount/history",
         "detail": f"{base}/detail",
-        "price": [f"{base}/price", f"{base}/price/history"],
+        "price": f"{base}/price/history",
         "bitcoin_list": "/api/etf/bitcoin/list",
-        "bitcoin_flows": "/api/etf/bitcoin/flows",
+        "bitcoin_flows": "/api/etf/bitcoin/flow-history",
         "bitcoin_history": "/api/etf/bitcoin/history",
-        "bitcoin_net_assets": "/api/etf/bitcoin/net-assets",
-        "bitcoin_premium_discount": "/api/etf/bitcoin/premium-discount",
+        "bitcoin_net_assets": "/api/etf/bitcoin/net-assets/history",
+        "bitcoin_premium_discount": "/api/etf/bitcoin/premium-discount/history",
         "bitcoin_detail": "/api/etf/bitcoin/detail",
-        "bitcoin_price": "/api/etf/bitcoin/price",
+        "bitcoin_price": "/api/etf/bitcoin/price/history",
     }
 
     asset_value = "bitcoin" if action.startswith("bitcoin_") else asset
@@ -1688,8 +1677,8 @@ async def coinglass_grayscale(
     client = get_client(ctx)
 
     endpoints: dict[ActionGrayscale, str | list[str]] = {
-        "holdings": ["/api/grayscale/holdings", "/api/grayscale/holdings-list"],
-        "premium": ["/api/grayscale/premium", "/api/grayscale/premium-history"],
+        "holdings": "/api/grayscale/holdings-list",
+        "premium": "/api/grayscale/premium-history",
     }
 
     params = {"fund": fund, "range": range}
@@ -1776,35 +1765,23 @@ async def coinglass_indicators(
     client = get_client(ctx)
 
     endpoints: dict[ActionIndicators, str | list[str]] = {
-        "rsi": ["/api/indicator/rsi", "/api/futures/rsi/list"],
-        "basis": ["/api/indicator/basis", "/api/futures/basis/history"],
-        "coinbase_premium": [
-            "/api/indicator/coinbase-premium",
-            "/api/coinbase-premium-index",
-        ],
+        "rsi": "/api/futures/rsi/list",
+        "basis": "/api/futures/basis/history",
+        "coinbase_premium": "/api/coinbase-premium-index",
         "fear_greed": "/api/index/fear-greed-history",
         "ahr999": "/api/index/ahr999",
         "puell": "/api/index/puell-multiple",
-        "stock_flow": ["/api/index/stock-to-flow", "/api/index/stock-flow"],
-        "pi_cycle": ["/api/index/pi-cycle-top", "/api/index/pi-cycle-indicator"],
-        "rainbow": ["/api/index/rainbow-chart", "/api/index/bitcoin/rainbow-chart"],
-        "bubble": ["/api/index/bitcoin-bubble-index", "/api/index/bitcoin/bubble-index"],
-        "ma_2year": ["/api/index/two-year-ma-multiplier", "/api/index/2-year-ma-multiplier"],
-        "ma_200week": [
-            "/api/index/two-hundred-week-ma-heatmap",
-            "/api/index/200-week-moving-average-heatmap",
-        ],
-        "profitable_days": [
-            "/api/index/bitcoin-profitable-days",
-            "/api/index/bitcoin/profitable-days",
-        ],
-        "stablecoin_mcap": [
-            "/api/index/stablecoin-market-cap",
-            "/api/index/stableCoin-marketCap-history",
-        ],
-        "bull_peak": ["/api/index/bull-market-peak-signals", "/api/bull-market-peak-indicator"],
-        "borrow_rate": ["/api/indicator/borrow-rate", "/api/borrow-interest-rate/history"],
-        "whale_index": "/api/index/whale-index",
+        "stock_flow": "/api/index/stock-flow",
+        "pi_cycle": "/api/index/pi-cycle-indicator",
+        "rainbow": "/api/index/bitcoin/rainbow-chart",
+        "bubble": "/api/index/bitcoin/bubble-index",
+        "ma_2year": "/api/index/2-year-ma-multiplier",
+        "ma_200week": "/api/index/200-week-moving-average-heatmap",
+        "profitable_days": "/api/index/bitcoin/profitable-days",
+        "stablecoin_mcap": "/api/index/stableCoin-marketCap-history",
+        "bull_peak": "/api/bull-market-peak-indicator",
+        "borrow_rate": "/api/borrow-interest-rate/history",
+        "whale_index": "/api/futures/whale-index/history",
     }
 
     params = {
