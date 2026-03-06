@@ -1983,6 +1983,11 @@ async def coinglass_grayscale(
 
 ActionIndicators = Literal[
     "rsi",
+    "futures_rsi",
+    "futures_ma",
+    "futures_ema",
+    "futures_macd",
+    "futures_boll",
     "basis",
     "coinbase_premium",
     "fear_greed",
@@ -1999,6 +2004,8 @@ ActionIndicators = Literal[
     "bull_peak",
     "borrow_rate",
     "whale_index",
+    "cdri_index",
+    "cgdi_index",
 ]
 
 
@@ -2016,7 +2023,7 @@ async def coinglass_indicators(
     action: Annotated[
         ActionIndicators,
         Field(
-            description="Market indicator: rsi, basis, coinbase_premium, fear_greed, ahr999, puell, stock_flow, pi_cycle, rainbow, bubble, ma_2year, ma_200week, profitable_days, stablecoin_mcap, bull_peak, borrow_rate, whale_index"
+            description="Market indicator: rsi, futures_rsi/futures_ma/futures_ema/futures_macd/futures_boll, basis, coinbase_premium, fear_greed, ahr999, puell, stock_flow, pi_cycle, rainbow, bubble, ma_2year, ma_200week, profitable_days, stablecoin_mcap, bull_peak, borrow_rate, whale_index, cdri_index, cgdi_index"
         ),
     ],
     symbol: Annotated[
@@ -2034,6 +2041,31 @@ async def coinglass_indicators(
     limit: Annotated[
         int, Field(ge=1, le=1000, description="Number of records")
     ] = 500,
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp in milliseconds")
+    ] = None,
+    end_time: Annotated[
+        int | None, Field(description="End timestamp in milliseconds")
+    ] = None,
+    series_type: Annotated[
+        Literal["open", "high", "low", "close"] | None,
+        Field(description="Series type for futures_* indicators"),
+    ] = None,
+    window: Annotated[
+        int | None, Field(description="Window for futures_rsi/ma/ema/boll")
+    ] = None,
+    mult: Annotated[
+        float | None, Field(description="Band multiplier for futures_boll")
+    ] = None,
+    fast_window: Annotated[
+        int | None, Field(description="Fast window for futures_macd")
+    ] = None,
+    slow_window: Annotated[
+        int | None, Field(description="Slow window for futures_macd")
+    ] = None,
+    signal_window: Annotated[
+        int | None, Field(description="Signal window for futures_macd")
+    ] = None,
     ctx: Context = None,
 ) -> dict:
     """Get market indicators and on-chain metrics.
@@ -2055,6 +2087,11 @@ async def coinglass_indicators(
 
     endpoints: dict[ActionIndicators, str | list[str]] = {
         "rsi": "/api/futures/rsi/list",
+        "futures_rsi": "/api/futures/indicators/rsi",
+        "futures_ma": "/api/futures/indicators/ma",
+        "futures_ema": "/api/futures/indicators/ema",
+        "futures_macd": "/api/futures/indicators/macd",
+        "futures_boll": "/api/futures/indicators/boll",
         "basis": "/api/futures/basis/history",
         "coinbase_premium": "/api/coinbase-premium-index",
         "fear_greed": "/api/index/fear-greed-history",
@@ -2071,15 +2108,52 @@ async def coinglass_indicators(
         "bull_peak": "/api/bull-market-peak-indicator",
         "borrow_rate": "/api/borrow-interest-rate/history",
         "whale_index": "/api/futures/whale-index/history",
+        "cdri_index": [
+            "/api/futures/cdri-index/history",
+            "/api/futures/cdri-index/history ",
+        ],
+        "cgdi_index": [
+            "/api/futures/cgdi-index/history",
+            "/api/futures/cgdi-index/history  ",
+        ],
     }
 
-    params = {
-        "symbol": symbol,
-        "exchange": exchange,
-        "interval": interval,
-        "range": range,
-        "limit": limit,
-    }
+    if action in {
+        "futures_rsi",
+        "futures_ma",
+        "futures_ema",
+        "futures_macd",
+        "futures_boll",
+    }:
+        if not exchange or not symbol or not interval:
+            raise ValueError(
+                f"Action '{action}' requires exchange + symbol + interval "
+                "(e.g., exchange='Binance', symbol='BTCUSDT', interval='h1')"
+            )
+        params = {
+            "exchange": exchange,
+            "symbol": symbol,
+            "interval": interval,
+            "limit": limit,
+            "start_time": start_time,
+            "end_time": end_time,
+            "series_type": series_type,
+            "window": window,
+            "mult": mult,
+            "fast_window": fast_window,
+            "slow_window": slow_window,
+            "signal_window": signal_window,
+        }
+    elif action in {"cdri_index", "cgdi_index"}:
+        params = None
+    else:
+        params = {
+            "symbol": symbol,
+            "exchange": exchange,
+            "interval": interval,
+            "range": range,
+            "limit": limit,
+        }
 
     data = await request_with_fallback(client, endpoints[action], params)
 
