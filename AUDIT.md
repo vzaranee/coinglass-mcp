@@ -1,0 +1,146 @@
+# Audit: 140 spec vs 104 server
+
+## PATH FIXES (server uses wrong path, 44 to fix)
+These exist in server but NOT in spec - likely wrong camelCase paths:
+
+- `/api/etf/bitcoin/flows`
+- `/api/etf/bitcoin/net-assets`
+- `/api/etf/bitcoin/premium-discount`
+- `/api/etf/bitcoin/price`
+- `/api/etf/{asset}`
+- `/api/futures/fundingRate/accumulated-exchange-list`
+- `/api/futures/fundingRate/arbitrage`
+- `/api/futures/fundingRate/exchange-list`
+- `/api/futures/fundingRate/ohlc-history`
+- `/api/futures/fundingRate/oi-weight-ohlc-history`
+- `/api/futures/fundingRate/vol-weight-ohlc-history`
+- `/api/futures/globalLongShortAccountRatio/history`
+- `/api/futures/liquidation/aggregated-heatmap/model{model}`
+- `/api/futures/liquidation/heatmap/model{model}`
+- `/api/futures/openInterest/exchange-history-chart`
+- `/api/futures/openInterest/exchange-list`
+- `/api/futures/openInterest/ohlc-aggregated-coin-margin-history`
+- `/api/futures/openInterest/ohlc-aggregated-history`
+- `/api/futures/openInterest/ohlc-aggregated-stablecoin`
+- `/api/futures/openInterest/ohlc-history`
+- `/api/futures/price-change-list`
+- `/api/futures/taker-buy-sell-volume/aggregated-history`
+- `/api/futures/taker-buy-sell-volume/history`
+- `/api/futures/topLongShortAccountRatio/history`
+- `/api/futures/topLongShortPositionRatio/history`
+- `/api/grayscale/holdings`
+- `/api/grayscale/premium`
+- `/api/index/bitcoin-bubble-index`
+- `/api/index/bitcoin-profitable-days`
+- `/api/index/bull-market-peak-signals`
+- `/api/index/pi-cycle-top`
+- `/api/index/rainbow-chart`
+- `/api/index/stablecoin-market-cap`
+- `/api/index/stock-to-flow`
+- `/api/index/two-hundred-week-ma-heatmap`
+- `/api/index/two-year-ma-multiplier`
+- `/api/index/whale-index`
+- `/api/indicator/basis`
+- `/api/indicator/borrow-rate`
+- `/api/indicator/coinbase-premium`
+- `/api/indicator/rsi`
+- `/api/price/ohlc-history`
+- `/api/spot/taker-buy-sell-volume/aggregated-history`
+- `/api/spot/taker-buy-sell-volume/exchange-list`
+
+## MISSING ENDPOINTS (80 to add)
+- `/api/article/list` required=[none] optional=[end_time, language, page, per_page, start_time]
+- `/api/calendar/central-bank-activities` required=[none] optional=[end_time, start_time]
+- `/api/calendar/economic-data` required=[none] optional=[end_time, language, start_time]
+- `/api/calendar/financial-events` required=[none] optional=[end_time, start_time]
+- `/api/chain/v2/whale-transfer` required=[none] optional=[end_time, start_time, symbol]
+- `/api/etf/bitcoin/flow-history` required=[none] optional=[]
+- `/api/etf/bitcoin/net-assets/history` required=[none] optional=[ticker]
+- `/api/etf/bitcoin/premium-discount/history` required=[none] optional=[ticker]
+- `/api/etf/bitcoin/price/history` required=[range, ticker] optional=[]
+- `/api/etf/ethereum/flow-history` required=[none] optional=[]
+- `/api/etf/ethereum/list` required=[none] optional=[]
+- `/api/etf/ethereum/net-assets/history` required=[none] optional=[]
+- `/api/etf/solana/flow-history` required=[none] optional=[]
+- `/api/etf/xrp/flow-history` required=[none] optional=[]
+- `/api/exchange_assets_transparency/list` required=[none] optional=[]
+- `/api/futures/aggregatedTakerBuySellVolumeRatio/history` required=[exchange, interval, symbol] optional=[endTime, limit, startTime]
+- `/api/futures/cdri-index/history ` required=[none] optional=[]
+- `/api/futures/cgdi-index/history  ` required=[none] optional=[]
+- `/api/futures/coins-price-change` required=[none] optional=[]
+- `/api/futures/delisted-exchange-pairs` required=[none] optional=[]
+- `/api/futures/funding-rate/accumulated-exchange-list` required=[range] optional=[]
+- `/api/futures/funding-rate/arbitrage` required=[usd] optional=[exchange_list]
+- `/api/futures/funding-rate/exchange-list` required=[none] optional=[]
+- `/api/futures/funding-rate/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/funding-rate/oi-weight-history` required=[interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/funding-rate/vol-weight-history` required=[interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/indicators/boll` required=[exchange, interval, symbol] optional=[end_time, limit, mult, series_type, start_time, window]
+- `/api/futures/indicators/ema` required=[exchange, interval, symbol] optional=[end_time, limit, series_type, start_time, window]
+- `/api/futures/indicators/ma` required=[exchange, interval, symbol] optional=[end_time, limit, series_type, start_time, window]
+- `/api/futures/indicators/macd` required=[exchange, interval, symbol] optional=[end_time, fast_window, limit, series_type, signal_window, slow_window, start_time]
+- `/api/futures/indicators/rsi` required=[exchange, interval, symbol] optional=[end_time, limit, series_type, start_time, window]
+- `/api/futures/liquidation/aggregated-heatmap/model1` required=[range, symbol] optional=[]
+- `/api/futures/liquidation/aggregated-heatmap/model2` required=[range, symbol] optional=[]
+- `/api/futures/liquidation/aggregated-heatmap/model3` required=[range, symbol] optional=[]
+- `/api/futures/liquidation/heatmap/model1` required=[exchange, range, symbol] optional=[]
+- `/api/futures/liquidation/heatmap/model2` required=[exchange, range, symbol] optional=[]
+- `/api/futures/liquidation/heatmap/model3` required=[exchange, range, symbol] optional=[]
+- `/api/futures/liquidation/max-pain` required=[none] optional=[range]
+- `/api/futures/net-position/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/open-interest/aggregated-coin-margin-history` required=[exchange_list, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/open-interest/aggregated-history` required=[interval, symbol] optional=[end_time, limit, start_time, unit]
+- `/api/futures/open-interest/aggregated-stablecoin-history` required=[exchange_list, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/open-interest/exchange-history-chart` required=[range, symbol] optional=[unit]
+- `/api/futures/open-interest/exchange-list` required=[symbol] optional=[]
+- `/api/futures/open-interest/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time, unit]
+- `/api/futures/price/history` required=[exchange, interval, limit, symbol] optional=[end_time, start_time]
+- `/api/futures/supported-exchanges` required=[none] optional=[]
+- `/api/futures/v2/net-position/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/v2/taker-buy-sell-volume/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/futures/volume/footprint-history` required=[none] optional=[]
+- `/api/futures/whale-index/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/hk-etf/bitcoin/flow-history` required=[none] optional=[]
+- `/api/index/altcoin-season` required=[none] optional=[]
+- `/api/index/bitcoin-active-addresses` required=[none] optional=[]
+- `/api/index/bitcoin-correlation` required=[none] optional=[]
+- `/api/index/bitcoin-dominance` required=[none] optional=[]
+- `/api/index/bitcoin-long-term-holder-supply` required=[none] optional=[]
+- `/api/index/bitcoin-lth-realized-price` required=[none] optional=[]
+- `/api/index/bitcoin-lth-sopr` required=[none] optional=[]
+- `/api/index/bitcoin-macro-oscillator` required=[none] optional=[]
+- `/api/index/bitcoin-net-unrealized-profit-loss` required=[none] optional=[]
+- `/api/index/bitcoin-new-addresses` required=[none] optional=[]
+- `/api/index/bitcoin-reserve-risk` required=[none] optional=[]
+- `/api/index/bitcoin-rhodl-ratio` required=[none] optional=[]
+- `/api/index/bitcoin-short-term-holder-supply` required=[none] optional=[]
+- `/api/index/bitcoin-sth-realized-price` required=[none] optional=[]
+- `/api/index/bitcoin-sth-sopr` required=[none] optional=[]
+- `/api/index/bitcoin-vs-global-m2-growth` required=[none] optional=[]
+- `/api/index/bitcoin-vs-us-m2-growth` required=[none] optional=[]
+- `/api/index/golden-ratio-multiplier` required=[none] optional=[]
+- `/api/index/option-vs-futures-oi-ratio` required=[none] optional=[]
+- `/api/large-orders` required=[exchanges, symbol, type] optional=[endTime, limit, startTime]
+- `/api/orderbook/large-limit-order-` required=[exName, symbol, type] optional=[]
+- `/api/orderbook/large-limit-order-history-` required=[exName, symbol, type] optional=[endTime, limit, startTime, state]
+- `/api/spot/orderbook/aggregated-ask-bids-history` required=[exchange_list, interval, symbol] optional=[end_time, limit, range, start_time]
+- `/api/spot/orderbook/ask-bids-history` required=[exchange, interval, symbol] optional=[end_time, limit, range, start_time]
+- `/api/spot/orderbook/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time]
+- `/api/spot/orderbook/large-limit-order` required=[exchange, symbol] optional=[]
+- `/api/spot/orderbook/large-limit-order-history` required=[end_time, exchange, start_time, state, symbol] optional=[]
+- `/api/spot/price/history` required=[exchange, interval, symbol] optional=[end_time, limit, start_time]
+
+## PARAM MISMATCHES (13 to fix)
+- `/api/bitfinex-margin-long-short` missing: ['interval']
+- `/api/coinbase-premium-index` missing: ['interval']
+- `/api/exchange/balance/chart` missing: ['symbol']
+- `/api/exchange/balance/list` missing: ['symbol']
+- `/api/futures/basis/history` missing: ['interval']
+- `/api/futures/liquidation/aggregated-history` missing: ['exchange_list']
+- `/api/futures/liquidation/exchange-list` missing: ['range']
+- `/api/futures/liquidation/order` missing: ['min_liquidation_amount']
+- `/api/futures/orderbook/aggregated-ask-bids-history` missing: ['exchange_list']
+- `/api/futures/orderbook/large-limit-order-history` missing: ['end_time', 'start_time', 'state']
+- `/api/grayscale/premium-history` missing: ['symbol']
+- `/api/option/exchange-oi-history` missing: ['unit']
+- `/api/option/exchange-vol-history` missing: ['unit']
