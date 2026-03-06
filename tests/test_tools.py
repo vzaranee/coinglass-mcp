@@ -288,6 +288,46 @@ class TestDerivativesTools:
 
         assert_text_result(result, "coinglass_funding_current(rates)", "BTC")
 
+    async def test_funding_current_rates_filters_symbol_client_side(self, setup_context, mock_response):
+        """coinglass_funding_current rates applies symbol filter after API response."""
+        ctx, mock_http = setup_context()
+        mock_http.get.return_value = mock_response([
+            {"symbol": "BTC", "rate": 0.0001},
+            {"symbol": "ETH", "rate": 0.0002},
+        ])
+
+        fn = get_fn(coinglass_funding_current)
+        result = await fn(action="rates", symbol="ETH", ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_funding_current(rates)", "ETH")
+        assert "BTC" not in text
+
+    async def test_funding_current_arbitrage_formats_nested_fields(self, setup_context, mock_response):
+        """coinglass_funding_current arbitrage formats nested buy/sell exchange fields."""
+        ctx, mock_http = setup_context()
+        mock_http.get.return_value = mock_response([
+            {
+                "symbol": "SXP",
+                "buy": {"exchange": "Bybit", "funding_rate": -4.0},
+                "sell": {"exchange": "KuCoin", "funding_rate": -1.05},
+                "apr": 3230.25,
+                "spread": 3.11,
+            },
+        ])
+
+        fn = get_fn(coinglass_funding_current)
+        result = await fn(action="arbitrage", usd=10000, ctx=ctx)
+
+        assert_text_result(
+            result,
+            "coinglass_funding_current(arbitrage)",
+            "SXP",
+            "Bybit",
+            "KuCoin",
+            "3.11",
+            "3230.25",
+        )
+
     async def test_long_short(self, setup_context, mock_response):
         """coinglass_long_short returns ratio data."""
         ctx, mock_http = setup_context()
@@ -336,6 +376,32 @@ class TestLiquidationTools:
         )
 
         assert_text_result(result, "coinglass_liq_history(aggregated)", "1.00M")
+
+    async def test_liq_history_max_pain_filters_symbol_client_side(self, setup_context, mock_response):
+        """coinglass_liq_history max_pain applies symbol filter after API response."""
+        ctx, mock_http = setup_context()
+        mock_http.get.return_value = mock_response([
+            {
+                "symbol": "BTC",
+                "long_max_pain_price": 51000,
+                "long_max_pain_level": 1000000,
+                "short_max_pain_price": 49000,
+                "short_max_pain_level": 900000,
+            },
+            {
+                "symbol": "ETH",
+                "long_max_pain_price": 3500,
+                "long_max_pain_level": 200000,
+                "short_max_pain_price": 3300,
+                "short_max_pain_level": 180000,
+            },
+        ])
+
+        fn = get_fn(coinglass_liq_history)
+        result = await fn(action="max_pain", symbol="ETH", range="24h", ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_liq_history(max_pain)", "ETH", "3500.00")
+        assert "BTC" not in text
 
     async def test_liq_orders_requires_plan(self, setup_context):
         """coinglass_liq_orders requires standard+ plan."""
@@ -427,6 +493,28 @@ class TestTakerTools:
 
         assert_text_result(result, "coinglass_taker(coin_history)", "55.56%")
 
+    async def test_taker_aggregated_ratio_uses_buy_sell_volumes(self, setup_context, mock_response):
+        """coinglass_taker aggregated_ratio derives ratio from buy/sell volumes."""
+        ctx, mock_http = setup_context()
+        mock_http.get.return_value = mock_response([
+            {
+                "time": 1700000000000,
+                "aggregated_buy_volume_usd": 100.0,
+                "aggregated_sell_volume_usd": 50.0,
+            },
+        ])
+
+        fn = get_fn(coinglass_taker)
+        result = await fn(action="aggregated_ratio", symbol="BTC", ctx=ctx)
+
+        assert_text_result(
+            result,
+            "coinglass_taker(aggregated_ratio)",
+            "100.00",
+            "50.00",
+            "0.67",
+        )
+
 
 class TestIndicatorTools:
     """Test indicator tools."""
@@ -466,6 +554,30 @@ class TestIndicatorTools:
         result = await fn(action="rsi", ctx=ctx)
 
         assert_text_result(result, "coinglass_indicators(rsi)", "BTC", "65.50")
+
+    async def test_ahr999_uses_real_field_names(self, setup_context, mock_response):
+        """coinglass_indicators ahr999 uses date_string/value/current/average fields."""
+        ctx, mock_http = setup_context()
+        mock_http.get.return_value = mock_response([
+            {
+                "date_string": "2011/02/01",
+                "average_price": 0.1365,
+                "ahr999_value": 4.44,
+                "current_value": 0.626,
+            },
+        ])
+
+        fn = get_fn(coinglass_indicators)
+        result = await fn(action="ahr999", ctx=ctx)
+
+        assert_text_result(
+            result,
+            "coinglass_indicators(ahr999)",
+            "2011/02/01",
+            "4.44",
+            "0.63",
+            "0.14",
+        )
 
 
 class TestMetaTools:

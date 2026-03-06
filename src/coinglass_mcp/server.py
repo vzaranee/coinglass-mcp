@@ -1021,6 +1021,8 @@ async def coinglass_funding_current(
     else:
         params = {"usd": usd, "exchange_list": exchange_list}
     data = await client.request(endpoints[action], params)
+    if action == "rates" and symbol and isinstance(data, list):
+        data = [x for x in data if isinstance(x, dict) and x.get("symbol") == symbol]
 
     return ok(action, data, symbol=symbol, range=range, usd=usd, exchange_list=exchange_list)
 
@@ -1247,6 +1249,8 @@ async def coinglass_liq_history(
         params = {}
 
     data = await client.request(endpoints[action], params)
+    if action == "max_pain" and symbol and isinstance(data, list):
+        data = [x for x in data if isinstance(x, dict) and x.get("symbol") == symbol]
 
     return ok(action, data, symbol=symbol or pair)
 

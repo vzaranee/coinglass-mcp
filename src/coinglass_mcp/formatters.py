@@ -231,6 +231,7 @@ def _detect_symbol(data: Any) -> str:
 def _find_time_value(item: dict[str, Any]) -> Any:
     return _pick(
         item,
+        "date_string",
         "create_time",
         "current_time",
         "start_time",
@@ -1016,19 +1017,42 @@ def format_coinglass_funding_current(action: str, data: Any) -> str:
         return _truncate(lines, total_items=len(flattened), shown_items=len(selected))
 
     if action == "arbitrage":
-        return _format_generic_top(
-            tool,
-            action,
-            data,
-            ["symbol", "long_ex", "short_ex", "spread"],
-            lambda r: [
-                str(_pick(r, "symbol", "pair") or "-"),
-                str(_pick(r, "buy", "long_exchange", "buy_exchange", "exchange_buy") or "-"),
-                str(_pick(r, "sell", "short_exchange", "sell_exchange", "exchange_sell") or "-"),
-                _fmt_pct(_pick(r, "spread", "spread_rate", "diff"), ratio_input=True),
+        rows = _records(data)
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        selected = _top(rows, sort_keys=("apr", "spread", "spread_rate", "diff"), limit=TOP_N)
+        lines = [_header(tool, action, data)]
+        lines += _render_table(
+            ["symbol", "buy_exchange", "sell_exchange", "spread", "apr"],
+            [
+                [
+                    str(_pick(r, "symbol", "pair") or "-"),
+                    str(
+                        _pick(
+                            _pick(r, "buy") if isinstance(_pick(r, "buy"), dict) else {},
+                            "exchange",
+                            "name",
+                        )
+                        or _pick(r, "long_exchange", "buy_exchange", "exchange_buy")
+                        or "-"
+                    ),
+                    str(
+                        _pick(
+                            _pick(r, "sell") if isinstance(_pick(r, "sell"), dict) else {},
+                            "exchange",
+                            "name",
+                        )
+                        or _pick(r, "short_exchange", "sell_exchange", "exchange_sell")
+                        or "-"
+                    ),
+                    _fmt_num(_pick(r, "spread", "spread_rate", "diff"), use_suffix=False),
+                    _fmt_num(_pick(r, "apr", "annualized_apr"), use_suffix=False),
+                ]
+                for r in selected
             ],
-            sort_keys=("spread", "spread_rate", "diff"),
         )
+        return _truncate(lines, total_items=len(rows), shown_items=len(selected))
 
     raise ValueError(f"No formatter action for {tool}:{action}")
 
@@ -1740,10 +1764,74 @@ def format_coinglass_taker(action: str, data: Any) -> str:
             tool,
             action,
             data,
-            ["time", "ratio"],
+            ["time", "buy_vol", "sell_vol", "ratio"],
             lambda r: [
                 _to_utc(_find_time_value(r)),
-                _fmt_num(_pick(r, "long_short_ratio", "ratio", "buy_sell_ratio", "buySellRatio"), use_suffix=False),
+                _fmt_num(
+                    _pick(
+                        r,
+                        "aggregated_buy_volume_usd",
+                        "taker_buy_volume_usd",
+                        "buy_vol_usd",
+                        "buy_volume",
+                        "buyVol",
+                        "buy",
+                    )
+                ),
+                _fmt_num(
+                    _pick(
+                        r,
+                        "aggregated_sell_volume_usd",
+                        "taker_sell_volume_usd",
+                        "sell_vol_usd",
+                        "sell_volume",
+                        "sellVol",
+                        "sell",
+                    )
+                ),
+                _fmt_num(
+                    (
+                        (_as_float(
+                            _pick(
+                                r,
+                                "aggregated_buy_volume_usd",
+                                "taker_buy_volume_usd",
+                                "buy_vol_usd",
+                                "buy_volume",
+                                "buyVol",
+                                "buy",
+                            )
+                        ) or 0.0)
+                        / max(
+                            (
+                                (_as_float(
+                                    _pick(
+                                        r,
+                                        "aggregated_buy_volume_usd",
+                                        "taker_buy_volume_usd",
+                                        "buy_vol_usd",
+                                        "buy_volume",
+                                        "buyVol",
+                                        "buy",
+                                    )
+                                ) or 0.0)
+                                + (_as_float(
+                                    _pick(
+                                        r,
+                                        "aggregated_sell_volume_usd",
+                                        "taker_sell_volume_usd",
+                                        "sell_vol_usd",
+                                        "sell_volume",
+                                        "sellVol",
+                                        "sell",
+                                    )
+                                ) or 0.0)
+                            ),
+                            1e-12,
+                        )
+                    ),
+                    use_suffix=False,
+                ),
             ],
         )
 
@@ -2071,6 +2159,27 @@ def format_coinglass_indicators(action: str, data: Any) -> str:
             ],
             sort_keys=("rsi", "value"),
         )
+
+    if action == "ahr999":
+        rows = _as_timeseries_rows(data)
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        tail = rows[-TIME_SERIES_N:]
+        lines = [_header(tool, action, data)]
+        lines += _render_table(
+            ["date", "ahr999", "current_value", "average_price"],
+            [
+                [
+                    str(_pick(r, "date_string", "date") or _to_utc(_find_time_value(r))),
+                    _fmt_num(_pick(r, "ahr999_value", "ahr999", "value"), use_suffix=False),
+                    _fmt_num(_pick(r, "current_value", "current", "price"), use_suffix=False),
+                    _fmt_num(_pick(r, "average_price", "avg_price", "average"), use_suffix=False),
+                ]
+                for r in tail
+            ],
+        )
+        return _truncate(lines, total_items=len(rows), shown_items=len(tail))
 
     rows = _as_timeseries_rows(data)
     if not rows:
