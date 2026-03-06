@@ -17,6 +17,7 @@ This server provides 22 tools for accessing CoinGlass API data including:
 """
 
 import os
+import inspect
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal, Optional
 
@@ -32,6 +33,7 @@ from coinglass_mcp.config import (
     PLAN_HIERARCHY,
     PLAN_INTERVALS,
 )
+from coinglass_mcp import formatters
 
 
 # ============================================================================
@@ -143,10 +145,19 @@ def check_params(action: str, **kwargs: Any) -> None:
 
 def ok(action: str, data: Any, **meta: Any) -> dict:
     """Create success response."""
+    caller = inspect.currentframe().f_back
+    tool_name = caller.f_code.co_name if caller else "unknown_tool"
+
+    try:
+        text = formatters.format_tool_response(tool_name, action, data)
+    except Exception as exc:
+        text = formatters.format_json_fallback(tool_name, action, data, reason=str(exc))
+
     return {
         "success": True,
         "action": action,
         "data": data,
+        "text": text,
         "metadata": {k: v for k, v in meta.items() if v is not None},
     }
 

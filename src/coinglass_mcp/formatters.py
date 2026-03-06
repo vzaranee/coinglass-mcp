@@ -1,0 +1,1474 @@
+"""Response formatters for CoinGlass MCP tools.
+
+Each formatter converts large raw API payloads into compact text suitable for LLM
+consumption while preserving key signal fields.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+from datetime import datetime, timezone
+from numbers import Number
+from typing import Any, Callable
+
+MAX_OUTPUT_CHARS = 3000
+FALLBACK_JSON_CHARS = 2000
+TOP_N = 10
+TIME_SERIES_N = 10
+
+PASS_THROUGH_TOOLS = {
+    "coinglass_config",
+    "coinglass_search",
+    "coinglass_article",
+    "coinglass_calendar",
+    "coinglass_market_info",
+}
+
+
+def format_tool_response(tool: str, action: str, data: Any) -> str:
+    """Dispatch formatter by tool name."""
+    fn_name = f"format_{tool}"
+    fn = globals().get(fn_name)
+    if not callable(fn):
+        raise KeyError(f"No formatter for tool '{tool}'")
+    return fn(action, data)
+
+
+def format_json_fallback(tool: str, action: str, data: Any, reason: str | None = None) -> str:
+    """Fallback response when formatter fails or is missing."""
+    header = _header(tool, action, data)
+    warning = "WARNING: formatter unavailable; showing truncated JSON fallback"
+    if reason:
+        warning = f"WARNING: {reason}; showing truncated JSON fallback"
+
+    raw = json.dumps(data, ensure_ascii=False, default=str)
+    if len(raw) > FALLBACK_JSON_CHARS:
+        body = raw[:FALLBACK_JSON_CHARS] + "... [truncated]"
+    else:
+        body = raw
+    return _truncate([header, warning, body], total_items=None, shown_items=None)
+
+
+def _pick(obj: Any, *keys: str) -> Any:
+    if not isinstance(obj, dict):
+        return None
+
+    lowered = {str(k).lower(): v for k, v in obj.items()}
+    for key in keys:
+        if key in obj:
+            return obj[key]
+        value = lowered.get(key.lower())
+        if value is not None:
+            return value
+    return None
+
+
+def _as_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Number):
+        return float(value)
+    if isinstance(value, str):
+        txt = value.strip().replace(",", "")
+        if not txt:
+            return None
+        try:
+            return float(txt)
+        except ValueError:
+            return None
+    return None
+
+
+def _fmt_num(value: Any, use_suffix: bool = True) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "-"
+
+    if not use_suffix:
+        return f"{number:.2f}"
+
+    absolute = abs(number)
+    if absolute >= 1_000_000_000:
+        return f"{number / 1_000_000_000:.2f}B"
+    if absolute >= 1_000_000:
+        return f"{number / 1_000_000:.2f}M"
+    if absolute >= 1_000:
+        return f"{number / 1_000:.2f}K"
+    return f"{number:.2f}"
+
+
+def _fmt_pct(value: Any, ratio_input: bool = False) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "-"
+
+    pct = number * 100 if ratio_input else number
+    return f"{pct:.2f}%"
+
+
+def _to_utc(value: Any) -> str:
+    if value is None:
+        return "-"
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return "-"
+        numeric = _as_float(stripped)
+        if numeric is not None and stripped.replace(".", "", 1).replace("-", "", 1).isdigit():
+            value = numeric
+        else:
+            iso = stripped.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(iso)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                dt = dt.astimezone(timezone.utc)
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                return stripped
+
+    number = _as_float(value)
+    if number is None:
+        return str(value)
+
+    # Handle seconds / milliseconds / microseconds heuristically.
+    if abs(number) > 1e14:
+        number = number / 1_000_000
+    elif abs(number) > 1e11:
+        number = number / 1_000
+
+    try:
+        dt = datetime.fromtimestamp(number, tz=timezone.utc)
+    except (ValueError, OSError, OverflowError):
+        return str(value)
+
+    return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _records(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [row for row in data if isinstance(row, dict)]
+
+    if isinstance(data, dict):
+        for key in (
+            "data",
+            "list",
+            "items",
+            "rows",
+            "result",
+            "records",
+            "history",
+            "candles",
+            "values",
+            "series",
+        ):
+            val = data.get(key)
+            if isinstance(val, list):
+                return [row for row in val if isinstance(row, dict)]
+
+        # Some endpoints return dict-of-lists or dict-of-dicts by exchange/symbol.
+        rows: list[dict[str, Any]] = []
+        for parent_key, val in data.items():
+            if isinstance(val, dict):
+                row = dict(val)
+                row.setdefault("key", parent_key)
+                row.setdefault("exchange", parent_key)
+                rows.append(row)
+            elif isinstance(val, list) and val and isinstance(val[0], dict):
+                for item in val:
+                    row = dict(item)
+                    row.setdefault("key", parent_key)
+                    row.setdefault("exchange", parent_key)
+                    rows.append(row)
+        if rows:
+            return rows
+
+    return []
+
+
+def _detect_symbol(data: Any) -> str:
+    if isinstance(data, dict):
+        value = _pick(
+            data,
+            "symbol",
+            "pair",
+            "ticker",
+            "coin",
+            "instrument_id",
+            "fund",
+            "asset",
+        )
+        if value is not None:
+            return str(value)
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return _detect_symbol(data[0])
+    return "-"
+
+
+def _find_time_value(item: dict[str, Any]) -> Any:
+    return _pick(
+        item,
+        "t",
+        "ts",
+        "time",
+        "timestamp",
+        "date",
+        "datetime",
+        "next_funding_time",
+        "nextFundingTime",
+        "update_time",
+        "updated_at",
+    )
+
+
+def _detect_timestamp(data: Any) -> str:
+    if isinstance(data, list) and data and isinstance(data[-1], dict):
+        time_value = _find_time_value(data[-1])
+        if time_value is not None:
+            return _to_utc(time_value)
+    if isinstance(data, dict):
+        time_value = _find_time_value(data)
+        if time_value is not None:
+            return _to_utc(time_value)
+        rows = _records(data)
+        if rows:
+            tv = _find_time_value(rows[-1])
+            if tv is not None:
+                return _to_utc(tv)
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+
+
+def _header(tool: str, action: str, data: Any) -> str:
+    return f"{tool}({action}) | {_detect_symbol(data)} | {_detect_timestamp(data)}"
+
+
+def _top(
+    rows: list[dict[str, Any]],
+    sort_keys: tuple[str, ...],
+    limit: int = TOP_N,
+    reverse: bool = True,
+) -> list[dict[str, Any]]:
+    def score(row: dict[str, Any]) -> float:
+        for key in sort_keys:
+            value = _as_float(_pick(row, key))
+            if value is not None:
+                return value
+        return float("-inf") if reverse else float("inf")
+
+    sorted_rows = sorted(rows, key=score, reverse=reverse)
+    return sorted_rows[:limit]
+
+
+def _line_from_values(values: list[str]) -> str:
+    return " | ".join(values)
+
+
+def _render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
+    lines = [_line_from_values(headers)]
+    lines.extend(_line_from_values(row) for row in rows)
+    return lines
+
+
+def _truncate(lines: list[str], total_items: int | None, shown_items: int | None) -> str:
+    text = "\n".join(lines)
+    if len(text) <= MAX_OUTPUT_CHARS:
+        return text
+
+    kept = list(lines)
+    removed = 0
+    while len("\n".join(kept)) > MAX_OUTPUT_CHARS - 40 and len(kept) > 1:
+        kept.pop()
+        removed += 1
+
+    if total_items is not None and shown_items is not None:
+        more_items = max(total_items - shown_items, 0) + removed
+    else:
+        more_items = max(removed, 1)
+
+    suffix = f"... ({more_items} more items)"
+    result = "\n".join(kept + [suffix])
+    if len(result) > MAX_OUTPUT_CHARS:
+        allowed = MAX_OUTPUT_CHARS - len(suffix) - 1
+        result = result[:allowed].rstrip() + "\n" + suffix
+    return result
+
+
+def _format_passthrough(tool: str, action: str, data: Any) -> str:
+    body = json.dumps(data, ensure_ascii=False, default=str)
+    return _truncate([_header(tool, action, data), body], total_items=None, shown_items=None)
+
+
+def _as_timeseries_rows(data: Any) -> list[dict[str, Any]]:
+    rows = _records(data)
+    if not rows and isinstance(data, dict):
+        # Some endpoints are dict of arrays with aligned indexes.
+        time_array = data.get("time") or data.get("t") or data.get("timestamp")
+        if isinstance(time_array, list):
+            keys = [k for k, v in data.items() if isinstance(v, list) and len(v) == len(time_array)]
+            rebuilt = []
+            for idx, t in enumerate(time_array):
+                item: dict[str, Any] = {"time": t}
+                for key in keys:
+                    item[key] = data[key][idx]
+                rebuilt.append(item)
+            rows = rebuilt
+    return rows
+
+
+def _format_last_points(
+    tool: str,
+    action: str,
+    data: Any,
+    headers: list[str],
+    builder: Callable[[dict[str, Any]], list[str]],
+    limit: int = TIME_SERIES_N,
+) -> str:
+    rows = _as_timeseries_rows(data)
+    if not rows:
+        return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+    selected = rows[-limit:]
+    table_rows = [builder(item) for item in selected]
+    lines = [_header(tool, action, data)] + _render_table(headers, table_rows)
+    return _truncate(lines, total_items=len(rows), shown_items=len(selected))
+
+
+def _format_generic_top(
+    tool: str,
+    action: str,
+    data: Any,
+    headers: list[str],
+    builder: Callable[[dict[str, Any]], list[str]],
+    sort_keys: tuple[str, ...],
+    limit: int = TOP_N,
+) -> str:
+    rows = _records(data)
+    if not rows:
+        return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+    selected = _top(rows, sort_keys=sort_keys, limit=limit, reverse=True)
+    table_rows = [builder(item) for item in selected]
+    lines = [_header(tool, action, data)] + _render_table(headers, table_rows)
+    return _truncate(lines, total_items=len(rows), shown_items=len(selected))
+
+
+def _safe_ratio(num: Any, den: Any) -> str:
+    num_f = _as_float(num)
+    den_f = _as_float(den)
+    if num_f is None or den_f in (None, 0.0):
+        return "-"
+    return f"{(num_f / den_f):.2f}"
+
+
+def _extract_depth_levels(data: Any) -> list[tuple[float, float]]:
+    """Extract (price, depth_value) pairs from heatmap-like payloads."""
+    levels: list[tuple[float, float]] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            price = _as_float(_pick(node, "price", "y", "level", "price_level"))
+            depth = _as_float(
+                _pick(
+                    node,
+                    "depth",
+                    "value",
+                    "volume",
+                    "liq",
+                    "liquidation",
+                    "total",
+                    "amount",
+                )
+            )
+            if price is not None and depth is not None:
+                levels.append((price, abs(depth)))
+
+            y_axis = node.get("y_axis") or node.get("yAxis")
+            matrix = node.get("z") or node.get("values") or node.get("data")
+            if isinstance(y_axis, list) and isinstance(matrix, list):
+                for idx, y in enumerate(y_axis):
+                    price_level = _as_float(y)
+                    if price_level is None:
+                        continue
+                    row_value = matrix[idx] if idx < len(matrix) else None
+                    if isinstance(row_value, list):
+                        total_depth = sum(abs(_as_float(v) or 0.0) for v in row_value)
+                    else:
+                        total_depth = abs(_as_float(row_value) or 0.0)
+                    if total_depth:
+                        levels.append((price_level, total_depth))
+
+            for val in node.values():
+                walk(val)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    dedup: dict[float, float] = {}
+    for price, depth in levels:
+        dedup[price] = dedup.get(price, 0.0) + depth
+    return sorted(dedup.items(), key=lambda x: x[1], reverse=True)
+
+
+def _bucket_label(price: float) -> str:
+    absolute = abs(price)
+    if absolute >= 100_000:
+        step = 1_000
+    elif absolute >= 10_000:
+        step = 100
+    elif absolute >= 1_000:
+        step = 10
+    elif absolute >= 100:
+        step = 1
+    else:
+        step = 0.1
+    low = math.floor(price / step) * step
+    high = low + step
+    return f"{_fmt_num(low, use_suffix=False)}-{_fmt_num(high, use_suffix=False)}"
+
+
+def _format_default(tool: str, action: str, data: Any, limit: int = TIME_SERIES_N) -> str:
+    rows = _records(data)
+    if not rows:
+        if isinstance(data, dict):
+            pairs = []
+            for key, value in list(data.items())[:TOP_N]:
+                if isinstance(value, (dict, list)):
+                    pairs.append(f"{key}=<{type(value).__name__}>")
+                else:
+                    pairs.append(f"{key}={_fmt_num(value) if _as_float(value) is not None else value}")
+            body = "; ".join(pairs) if pairs else "No data returned"
+            return _truncate([_header(tool, action, data), body], None, None)
+        return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+    selected = rows[-limit:]
+    cols = sorted({k for row in selected for k in row.keys()})[:6]
+    table_rows: list[list[str]] = []
+    for row in selected:
+        out: list[str] = []
+        for col in cols:
+            value = row.get(col)
+            if col.lower() in {"time", "timestamp", "date", "datetime", "t", "ts"}:
+                out.append(_to_utc(value))
+            elif _as_float(value) is not None:
+                out.append(_fmt_num(value))
+            else:
+                out.append(str(value) if value is not None else "-")
+        table_rows.append(out)
+
+    lines = [_header(tool, action, data)] + _render_table(cols, table_rows)
+    return _truncate(lines, total_items=len(rows), shown_items=len(selected))
+
+
+# =============================================================================
+# TOOL FORMATTERS (26)
+# =============================================================================
+
+
+def format_coinglass_article(action: str, data: Any) -> str:
+    return _format_passthrough("coinglass_article", action, data)
+
+
+def format_coinglass_calendar(action: str, data: Any) -> str:
+    return _format_passthrough("coinglass_calendar", action, data)
+
+
+def format_coinglass_market_info(action: str, data: Any) -> str:
+    return _format_passthrough("coinglass_market_info", action, data)
+
+
+def format_coinglass_market_data(action: str, data: Any) -> str:
+    tool = "coinglass_market_data"
+
+    if action == "coins_summary":
+        row = data if isinstance(data, dict) else (_records(data)[0] if _records(data) else None)
+        if not isinstance(row, dict):
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        lines = [
+            _header(tool, action, data),
+            f"price={_fmt_num(_pick(row, 'price', 'close', 'c'), use_suffix=False)}",
+            (
+                "changes="
+                f"1h:{_fmt_pct(_pick(row, 'change_1h', 'price_change_percent_1h', 'priceChangePercent1h'))}, "
+                f"4h:{_fmt_pct(_pick(row, 'change_4h', 'price_change_percent_4h', 'priceChangePercent4h'))}, "
+                f"24h:{_fmt_pct(_pick(row, 'change_24h', 'price_change_percent_24h', 'priceChangePercent24h'))}"
+            ),
+            (
+                "metrics="
+                f"oi:{_fmt_num(_pick(row, 'oi', 'open_interest', 'openInterest'))}, "
+                f"volume:{_fmt_num(_pick(row, 'volume', 'volume_24h', 'volume24h'))}, "
+                f"mcap:{_fmt_num(_pick(row, 'market_cap', 'marketCap', 'mcap'))}, "
+                f"funding:{_fmt_pct(_pick(row, 'funding_rate', 'fundingRate'), ratio_input=True)}"
+            ),
+        ]
+        return _truncate(lines, None, None)
+
+    if action == "pairs_summary":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["pair", "exchange", "price", "chg_24h", "oi", "volume"],
+            lambda r: [
+                str(_pick(r, "pair", "symbol", "instrument_id") or "-"),
+                str(_pick(r, "exchange", "exName") or "-"),
+                _fmt_num(_pick(r, "price", "close", "c"), use_suffix=False),
+                _fmt_pct(_pick(r, "change_24h", "price_change_percent_24h", "change24h")),
+                _fmt_num(_pick(r, "oi", "open_interest", "openInterest")),
+                _fmt_num(_pick(r, "volume", "volume_24h", "volume24h")),
+            ],
+            sort_keys=("volume", "volume_24h", "volume24h"),
+        )
+
+    if action == "price_changes":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["symbol", "1h", "4h", "24h"],
+            lambda r: [
+                str(_pick(r, "symbol", "pair", "coin") or "-"),
+                _fmt_pct(_pick(r, "change_1h", "price_change_percent_1h", "h1")),
+                _fmt_pct(_pick(r, "change_4h", "price_change_percent_4h", "h4")),
+                _fmt_pct(_pick(r, "change_24h", "price_change_percent_24h", "d1")),
+            ],
+            sort_keys=("change_24h", "price_change_percent_24h", "d1"),
+        )
+
+    if action == "volume_footprint":
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "buy_vol", "sell_vol", "ratio"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "buy_volume", "buyVol", "buy", "buy_volume_usd")),
+                _fmt_num(_pick(r, "sell_volume", "sellVol", "sell", "sell_volume_usd")),
+                _safe_ratio(
+                    _pick(r, "buy_volume", "buyVol", "buy", "buy_volume_usd"),
+                    _pick(r, "sell_volume", "sellVol", "sell", "sell_volume_usd"),
+                ),
+            ],
+        )
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_price_history(action: str, data: Any) -> str:
+    tool = "coinglass_price_history"
+    if action != "price_history":
+        raise ValueError(f"No formatter action for {tool}:{action}")
+
+    return _format_last_points(
+        tool,
+        action,
+        data,
+        ["time", "open", "high", "low", "close", "volume"],
+        lambda r: [
+            _to_utc(_find_time_value(r)),
+            _fmt_num(_pick(r, "o", "open"), use_suffix=False),
+            _fmt_num(_pick(r, "h", "high"), use_suffix=False),
+            _fmt_num(_pick(r, "l", "low"), use_suffix=False),
+            _fmt_num(_pick(r, "c", "close"), use_suffix=False),
+            _fmt_num(_pick(r, "v", "volume", "vol")),
+        ],
+    )
+
+
+def format_coinglass_oi_history(action: str, data: Any) -> str:
+    tool = "coinglass_oi_history"
+    if action not in {"aggregated", "pair", "stablecoin", "coin_margin"}:
+        raise ValueError(f"No formatter action for {tool}:{action}")
+
+    return _format_last_points(
+        tool,
+        action,
+        data,
+        ["time", "oi", "oi_change"],
+        lambda r: [
+            _to_utc(_find_time_value(r)),
+            _fmt_num(_pick(r, "oi", "c", "close", "open_interest", "openInterest")),
+            _fmt_pct(
+                _pick(r, "oi_change", "oi_change_percent", "change", "change_percent")
+            ),
+        ],
+    )
+
+
+def format_coinglass_oi_distribution(action: str, data: Any) -> str:
+    tool = "coinglass_oi_distribution"
+
+    if action == "by_exchange":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["exchange", "oi_usd", "oi_chg_24h", "share"],
+            lambda r: [
+                str(_pick(r, "exchange", "exName", "key") or "-"),
+                _fmt_num(_pick(r, "oi", "oi_usd", "open_interest", "openInterest")),
+                _fmt_pct(_pick(r, "change_24h", "oi_change_24h", "change24h")),
+                _fmt_pct(_pick(r, "percentage", "share", "percent")),
+            ],
+            sort_keys=("oi", "oi_usd", "open_interest", "openInterest"),
+        )
+
+    if action == "exchange_chart":
+        rows = _records(data)
+        if not rows and isinstance(data, dict):
+            lines = [_header(tool, action, data), "exchange | time | oi"]
+            total = 0
+            shown = 0
+            for exchange, series in list(data.items())[:5]:
+                if not isinstance(series, list):
+                    continue
+                total += len(series)
+                tail = [x for x in series if isinstance(x, dict)][-5:]
+                shown += len(tail)
+                for item in tail:
+                    lines.append(
+                        _line_from_values(
+                            [
+                                str(exchange),
+                                _to_utc(_find_time_value(item)),
+                                _fmt_num(_pick(item, "oi", "value", "c", "close")),
+                            ]
+                        )
+                    )
+            if len(lines) == 2:
+                lines.append("No data returned")
+            return _truncate(lines, total_items=total if total else None, shown_items=shown if shown else None)
+
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        # Top 5 exchanges by latest OI, last 5 points each.
+        by_exchange: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            ex = str(_pick(row, "exchange", "exName", "key") or "unknown")
+            by_exchange.setdefault(ex, []).append(row)
+        ranked = sorted(
+            by_exchange.items(),
+            key=lambda kv: _as_float(_pick(kv[1][-1], "oi", "value", "c", "close")) or 0.0,
+            reverse=True,
+        )[:5]
+
+        lines = [_header(tool, action, data), "exchange | time | oi"]
+        total = 0
+        shown = 0
+        for ex, series in ranked:
+            total += len(series)
+            tail = series[-5:]
+            shown += len(tail)
+            for item in tail:
+                lines.append(
+                    _line_from_values(
+                        [
+                            ex,
+                            _to_utc(_find_time_value(item)),
+                            _fmt_num(_pick(item, "oi", "value", "c", "close")),
+                        ]
+                    )
+                )
+        return _truncate(lines, total_items=total, shown_items=shown)
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_funding_current(action: str, data: Any) -> str:
+    tool = "coinglass_funding_current"
+
+    if action == "rates":
+        rows = _records(data)
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        selected = _top(rows, sort_keys=("funding_rate", "rate", "fundingRate"), limit=TOP_N)
+        rates = [_as_float(_pick(r, "funding_rate", "rate", "fundingRate")) for r in rows]
+        clean_rates = [x for x in rates if x is not None]
+
+        lines = [_header(tool, action, data)]
+        if clean_rates:
+            avg_rate = sum(clean_rates) / len(clean_rates)
+            lines.append(
+                "summary="
+                f"avg:{_fmt_pct(avg_rate, ratio_input=True)}, "
+                f"min:{_fmt_pct(min(clean_rates), ratio_input=True)}, "
+                f"max:{_fmt_pct(max(clean_rates), ratio_input=True)}"
+            )
+
+        lines += _render_table(
+            ["exchange", "funding_rate", "next_funding"],
+            [
+                [
+                    str(_pick(r, "exchange", "exName") or "-"),
+                    _fmt_pct(_pick(r, "funding_rate", "rate", "fundingRate"), ratio_input=True),
+                    _to_utc(_pick(r, "next_funding_time", "nextFundingTime", "time")),
+                ]
+                for r in selected
+            ],
+        )
+        return _truncate(lines, total_items=len(rows), shown_items=len(selected))
+
+    if action == "accumulated":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["exchange", "symbol", "acc_rate"],
+            lambda r: [
+                str(_pick(r, "exchange", "exName") or "-"),
+                str(_pick(r, "symbol", "pair") or "-"),
+                _fmt_pct(_pick(r, "accumulated_rate", "rate", "value"), ratio_input=True),
+            ],
+            sort_keys=("accumulated_rate", "rate", "value"),
+        )
+
+    if action == "arbitrage":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["symbol", "long_ex", "short_ex", "spread"],
+            lambda r: [
+                str(_pick(r, "symbol", "pair") or "-"),
+                str(_pick(r, "long_exchange", "buy_exchange", "exchange_buy") or "-"),
+                str(_pick(r, "short_exchange", "sell_exchange", "exchange_sell") or "-"),
+                _fmt_pct(_pick(r, "spread", "spread_rate", "diff"), ratio_input=True),
+            ],
+            sort_keys=("spread", "spread_rate", "diff"),
+        )
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_funding_history(action: str, data: Any) -> str:
+    tool = "coinglass_funding_history"
+    if action not in {"pair", "oi_weighted", "vol_weighted"}:
+        raise ValueError(f"No formatter action for {tool}:{action}")
+
+    return _format_last_points(
+        tool,
+        action,
+        data,
+        ["time", "rate"],
+        lambda r: [
+            _to_utc(_find_time_value(r)),
+            _fmt_pct(_pick(r, "rate", "c", "close", "funding_rate", "fundingRate"), ratio_input=True),
+        ],
+    )
+
+
+def format_coinglass_long_short(action: str, data: Any) -> str:
+    tool = "coinglass_long_short"
+
+    if action in {"global", "top_accounts", "top_positions", "taker_ratio"}:
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "long", "short", "ratio"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_pct(_pick(r, "long_ratio", "longRatio", "long", "buy_ratio"), ratio_input=True),
+                _fmt_pct(_pick(r, "short_ratio", "shortRatio", "short", "sell_ratio"), ratio_input=True),
+                _fmt_num(_pick(r, "ratio", "long_short_ratio", "longShortRatio"), use_suffix=False),
+            ],
+        )
+
+    if action in {"net_position", "net_position_v2"}:
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "net_long", "net_short"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "net_long", "long", "long_volume", "longVol")),
+                _fmt_num(_pick(r, "net_short", "short", "short_volume", "shortVol")),
+            ],
+        )
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_liq_history(action: str, data: Any) -> str:
+    tool = "coinglass_liq_history"
+
+    if action in {"aggregated", "pair"}:
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "long_liq", "short_liq", "total"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "long_liq", "longLiq", "long", "longUsd")),
+                _fmt_num(_pick(r, "short_liq", "shortLiq", "short", "shortUsd")),
+                _fmt_num(
+                    (_as_float(_pick(r, "long_liq", "longLiq", "long", "longUsd")) or 0.0)
+                    + (_as_float(_pick(r, "short_liq", "shortLiq", "short", "shortUsd")) or 0.0)
+                ),
+            ],
+        )
+
+    if action == "by_coin":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["symbol", "long_liq", "short_liq", "total", "long_pct"],
+            lambda r: [
+                str(_pick(r, "symbol", "coin") or "-"),
+                _fmt_num(_pick(r, "long_liq", "longLiq", "long")),
+                _fmt_num(_pick(r, "short_liq", "shortLiq", "short")),
+                _fmt_num(_pick(r, "total", "liq_usd", "amount")),
+                _fmt_pct(_pick(r, "long_percent", "long_pct", "longRatio"), ratio_input=True),
+            ],
+            sort_keys=("total", "liq_usd", "amount", "long_liq", "longLiq"),
+        )
+
+    if action == "by_exchange":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["exchange", "liq_usd", "long_pct", "short_pct"],
+            lambda r: [
+                str(_pick(r, "exchange", "exName", "key") or "-"),
+                _fmt_num(_pick(r, "liq_usd", "total", "amount", "liquidation")),
+                _fmt_pct(_pick(r, "long_percent", "long_pct", "longRatio"), ratio_input=True),
+                _fmt_pct(_pick(r, "short_percent", "short_pct", "shortRatio"), ratio_input=True),
+            ],
+            sort_keys=("liq_usd", "total", "amount", "liquidation"),
+        )
+
+    if action == "max_pain":
+        row = data if isinstance(data, dict) else (_records(data)[0] if _records(data) else None)
+        if not isinstance(row, dict):
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+        lines = [
+            _header(tool, action, data),
+            (
+                "long_max_pain="
+                f"price:{_fmt_num(_pick(row, 'long_max_pain_price', 'longMaxPainPrice'), use_suffix=False)}, "
+                f"level:{_fmt_num(_pick(row, 'long_max_pain_level', 'longMaxPainLevel'))}"
+            ),
+            (
+                "short_max_pain="
+                f"price:{_fmt_num(_pick(row, 'short_max_pain_price', 'shortMaxPainPrice'), use_suffix=False)}, "
+                f"level:{_fmt_num(_pick(row, 'short_max_pain_level', 'shortMaxPainLevel'))}"
+            ),
+        ]
+        return _truncate(lines, None, None)
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_liq_orders(action: str, data: Any) -> str:
+    tool = "coinglass_liq_orders"
+    if action != "orders":
+        raise ValueError(f"No formatter action for {tool}:{action}")
+
+    rows = _records(data)
+    if not rows:
+        return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+    buckets: dict[str, dict[str, float]] = {}
+    for row in rows:
+        price = _as_float(_pick(row, "price", "mark_price", "trigger_price"))
+        value = _as_float(_pick(row, "value", "volume", "amount", "liq_usd")) or 0.0
+        side_raw = str(_pick(row, "side", "direction", "position_side") or "").lower()
+        if price is None:
+            continue
+
+        label = _bucket_label(price)
+        cell = buckets.setdefault(label, {"long": 0.0, "short": 0.0})
+        if "long" in side_raw or side_raw == "2":
+            cell["long"] += value
+        elif "short" in side_raw or side_raw == "1":
+            cell["short"] += value
+        else:
+            # Unknown side: split evenly to keep total accounted.
+            cell["long"] += value / 2
+            cell["short"] += value / 2
+
+    ranked = sorted(
+        buckets.items(),
+        key=lambda kv: kv[1]["long"] + kv[1]["short"],
+        reverse=True,
+    )[:TOP_N]
+
+    lines = [_header(tool, action, data)]
+    lines += _render_table(
+        ["price_range", "long_liq_vol", "short_liq_vol"],
+        [
+            [
+                label,
+                _fmt_num(vals["long"]),
+                _fmt_num(vals["short"]),
+            ]
+            for label, vals in ranked
+        ],
+    )
+    return _truncate(lines, total_items=len(buckets), shown_items=len(ranked))
+
+
+def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
+    tool = "coinglass_liq_heatmap"
+
+    if action in {"coin_heatmap", "pair_heatmap"}:
+        levels = _extract_depth_levels(data)
+        if not levels:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        top_levels = levels[:TOP_N]
+        lines = [_header(tool, action, data)]
+        lines += _render_table(
+            ["price_level", "liq_volume"],
+            [[_fmt_num(price, use_suffix=False), _fmt_num(vol)] for price, vol in top_levels],
+        )
+        return _truncate(lines, total_items=len(levels), shown_items=len(top_levels))
+
+    if action in {"coin_map", "pair_map"}:
+        rows = _records(data)
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        normalized: list[dict[str, Any]] = []
+        for r in rows:
+            long_v = _as_float(_pick(r, "long_liq", "long", "buy", "longLiq")) or 0.0
+            short_v = _as_float(_pick(r, "short_liq", "short", "sell", "shortLiq")) or 0.0
+            total = long_v + short_v
+            normalized.append({
+                "price": _pick(r, "price", "level", "price_level"),
+                "long": long_v,
+                "short": short_v,
+                "total": total,
+            })
+
+        selected = sorted(normalized, key=lambda x: x["total"], reverse=True)[:TOP_N]
+        lines = [_header(tool, action, data)]
+        lines += _render_table(
+            ["price_level", "long_liq", "short_liq", "total"],
+            [
+                [
+                    _fmt_num(item["price"], use_suffix=False),
+                    _fmt_num(item["long"]),
+                    _fmt_num(item["short"]),
+                    _fmt_num(item["total"]),
+                ]
+                for item in selected
+            ],
+        )
+        return _truncate(lines, total_items=len(normalized), shown_items=len(selected))
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_ob_history(action: str, data: Any) -> str:
+    tool = "coinglass_ob_history"
+
+    if action in {"pair_depth", "coin_depth"}:
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "bid_usd", "ask_usd", "bid_ask_ratio"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "bid", "bid_usd", "bidVolume", "bid_depth")),
+                _fmt_num(_pick(r, "ask", "ask_usd", "askVolume", "ask_depth")),
+                _safe_ratio(
+                    _pick(r, "bid", "bid_usd", "bidVolume", "bid_depth"),
+                    _pick(r, "ask", "ask_usd", "askVolume", "ask_depth"),
+                ),
+            ],
+            limit=5,
+        )
+
+    if action == "heatmap":
+        levels = _extract_depth_levels(data)
+        if not levels:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        selected = levels[:TOP_N]
+        lines = [_header(tool, action, data)]
+        lines += _render_table(
+            ["price_level", "depth"],
+            [[_fmt_num(price, use_suffix=False), _fmt_num(depth)] for price, depth in selected],
+        )
+        return _truncate(lines, total_items=len(levels), shown_items=len(selected))
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_ob_large_orders(action: str, data: Any) -> str:
+    tool = "coinglass_ob_large_orders"
+    if action not in {"current", "history", "large_orders", "legacy_current", "legacy_history"}:
+        raise ValueError(f"No formatter action for {tool}:{action}")
+
+    rows = _records(data)
+    if not rows and isinstance(data, dict):
+        rows = [data]
+    if not rows:
+        return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+    normalized = []
+    total_bid = 0.0
+    total_ask = 0.0
+    for r in rows:
+        volume = _as_float(_pick(r, "volume", "amount", "size", "order_value", "value")) or 0.0
+        side_raw = str(_pick(r, "side", "order_side", "direction") or "").lower()
+        if side_raw in {"2", "bid", "buy", "long"}:
+            total_bid += volume
+            side = "bid"
+        elif side_raw in {"1", "ask", "sell", "short"}:
+            total_ask += volume
+            side = "ask"
+        else:
+            side = "-"
+
+        normalized.append({
+            "price": _pick(r, "price", "order_price", "trigger_price"),
+            "volume": volume,
+            "side": side,
+            "time": _find_time_value(r),
+        })
+
+    top5 = sorted(normalized, key=lambda x: x["volume"], reverse=True)[:5]
+
+    lines = [
+        _header(tool, action, data),
+        f"summary=count:{len(rows)}, total_bid_volume:{_fmt_num(total_bid)}, total_ask_volume:{_fmt_num(total_ask)}",
+    ]
+    lines += _render_table(
+        ["time", "price", "volume", "side"],
+        [
+            [
+                _to_utc(item["time"]),
+                _fmt_num(item["price"], use_suffix=False),
+                _fmt_num(item["volume"]),
+                item["side"],
+            ]
+            for item in top5
+        ],
+    )
+    return _truncate(lines, total_items=len(rows), shown_items=len(top5))
+
+
+def format_coinglass_whale_positions(action: str, data: Any) -> str:
+    tool = "coinglass_whale_positions"
+
+    if action == "alerts":
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "exchange", "symbol", "side", "size"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                str(_pick(r, "exchange", "exName") or "-"),
+                str(_pick(r, "symbol", "coin") or "-"),
+                str(_pick(r, "side", "direction") or "-"),
+                _fmt_num(_pick(r, "size", "notional", "value", "amount")),
+            ],
+        )
+
+    if action in {"positions", "all_positions"}:
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["exchange", "symbol", "side", "size", "entry", "pnl"],
+            lambda r: [
+                str(_pick(r, "exchange", "exName") or "-"),
+                str(_pick(r, "symbol", "coin") or "-"),
+                str(_pick(r, "side", "direction") or "-"),
+                _fmt_num(_pick(r, "size", "notional", "value", "amount")),
+                _fmt_num(_pick(r, "entry", "entry_price", "entryPrice"), use_suffix=False),
+                _fmt_num(_pick(r, "pnl", "unrealized_pnl", "profit")),
+            ],
+            sort_keys=("notional", "size", "value", "amount"),
+        )
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_bitfinex_longs_shorts(action: str, data: Any) -> str:
+    tool = "coinglass_bitfinex_longs_shorts"
+    # Server uses action='bitfinex_margin'.
+    if action not in {"bitfinex_margin"}:
+        raise ValueError(f"No formatter action for {tool}:{action}")
+
+    return _format_last_points(
+        tool,
+        action,
+        data,
+        ["time", "long_vol", "short_vol", "ratio"],
+        lambda r: [
+            _to_utc(_find_time_value(r)),
+            _fmt_num(_pick(r, "long", "long_vol", "longVolume", "longs")),
+            _fmt_num(_pick(r, "short", "short_vol", "shortVolume", "shorts")),
+            _safe_ratio(
+                _pick(r, "long", "long_vol", "longVolume", "longs"),
+                _pick(r, "short", "short_vol", "shortVolume", "shorts"),
+            ),
+        ],
+    )
+
+
+def format_coinglass_taker(action: str, data: Any) -> str:
+    tool = "coinglass_taker"
+
+    if action in {"coin_history", "pair_history"}:
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "buy_vol", "sell_vol", "buy_pct"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "buy_volume", "buyVol", "buy", "buy_usd")),
+                _fmt_num(_pick(r, "sell_volume", "sellVol", "sell", "sell_usd")),
+                _fmt_pct(
+                    (
+                        (_as_float(_pick(r, "buy_volume", "buyVol", "buy", "buy_usd")) or 0.0)
+                        / max(
+                            (
+                                (_as_float(_pick(r, "buy_volume", "buyVol", "buy", "buy_usd")) or 0.0)
+                                + (_as_float(_pick(r, "sell_volume", "sellVol", "sell", "sell_usd")) or 0.0)
+                            ),
+                            1e-12,
+                        )
+                    ),
+                    ratio_input=True,
+                ),
+            ],
+        )
+
+    if action == "by_exchange":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["exchange", "buy_vol", "sell_vol", "ratio"],
+            lambda r: [
+                str(_pick(r, "exchange", "exName", "key") or "-"),
+                _fmt_num(_pick(r, "buy_volume", "buyVol", "buy")),
+                _fmt_num(_pick(r, "sell_volume", "sellVol", "sell")),
+                _fmt_num(_pick(r, "ratio", "buy_sell_ratio", "buySellRatio"), use_suffix=False),
+            ],
+            sort_keys=("total", "buy_volume", "buyVol", "sell_volume", "sellVol"),
+        )
+
+    if action == "aggregated_ratio":
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "ratio"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "ratio", "buy_sell_ratio", "buySellRatio"), use_suffix=False),
+            ],
+        )
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_spot(action: str, data: Any) -> str:
+    tool = "coinglass_spot"
+
+    if action in {"coins_markets", "pairs_markets"}:
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["pair", "exchange", "price", "chg_24h", "oi", "volume"],
+            lambda r: [
+                str(_pick(r, "pair", "symbol") or "-"),
+                str(_pick(r, "exchange", "exName") or "-"),
+                _fmt_num(_pick(r, "price", "close", "c"), use_suffix=False),
+                _fmt_pct(_pick(r, "change_24h", "price_change_percent_24h", "change24h")),
+                _fmt_num(_pick(r, "oi", "open_interest", "openInterest")),
+                _fmt_num(_pick(r, "volume", "volume_24h", "volume24h")),
+            ],
+            sort_keys=("volume", "volume_24h", "volume24h"),
+        )
+
+    return _format_default(tool, action, data, limit=TIME_SERIES_N)
+
+
+def format_coinglass_options(action: str, data: Any) -> str:
+    tool = "coinglass_options"
+
+    if action == "info":
+        rows = _records(data)
+        if not rows and isinstance(data, dict):
+            rows = [data]
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        selected = _top(rows, sort_keys=("oi", "open_interest", "volume"), limit=TOP_N)
+        lines = [_header(tool, action, data)]
+        lines += _render_table(
+            ["exchange", "oi", "volume", "chg_24h"],
+            [
+                [
+                    str(_pick(r, "exchange", "exName") or "-"),
+                    _fmt_num(_pick(r, "oi", "open_interest", "openInterest")),
+                    _fmt_num(_pick(r, "volume", "vol")),
+                    _fmt_pct(_pick(r, "change_24h", "change24h", "oi_change_24h")),
+                ]
+                for r in selected
+            ],
+        )
+        return _truncate(lines, total_items=len(rows), shown_items=len(selected))
+
+    if action == "max_pain":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["expiry", "max_pain", "call_oi", "put_oi", "pcr"],
+            lambda r: [
+                str(_pick(r, "expiry", "date") or "-"),
+                _fmt_num(_pick(r, "max_pain_price", "maxPainPrice"), use_suffix=False),
+                _fmt_num(_pick(r, "call_oi", "callOi")),
+                _fmt_num(_pick(r, "put_oi", "putOi")),
+                _fmt_num(_pick(r, "pcr", "put_call_ratio", "putCallRatio"), use_suffix=False),
+            ],
+            sort_keys=("expiry_time", "expiry", "date"),
+        )
+
+    if action == "volume_history":
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "volume", "call_vol", "put_vol"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "volume", "vol", "total")),
+                _fmt_num(_pick(r, "call_volume", "call_vol", "callVol")),
+                _fmt_num(_pick(r, "put_volume", "put_vol", "putVol")),
+            ],
+        )
+
+    if action == "oi_history":
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "oi", "call_oi", "put_oi"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(_pick(r, "oi", "open_interest", "openInterest")),
+                _fmt_num(_pick(r, "call_oi", "callOi")),
+                _fmt_num(_pick(r, "put_oi", "putOi")),
+            ],
+        )
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_onchain(action: str, data: Any) -> str:
+    tool = "coinglass_onchain"
+
+    if action == "balance_list":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["exchange", "balance", "chg_24h"],
+            lambda r: [
+                str(_pick(r, "exchange", "exName", "key") or "-"),
+                _fmt_num(_pick(r, "balance", "value", "amount")),
+                _fmt_pct(_pick(r, "change_24h", "change24h", "balance_change_24h")),
+            ],
+            sort_keys=("balance", "value", "amount"),
+        )
+
+    if action == "whale_transfer":
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "from", "to", "amount", "tx"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                str(_pick(r, "from", "from_address", "fromAddress") or "-"),
+                str(_pick(r, "to", "to_address", "toAddress") or "-"),
+                _fmt_num(_pick(r, "amount", "value", "usd", "amount_usd")),
+                str(_pick(r, "tx", "tx_hash", "hash") or "-"),
+            ],
+        )
+
+    return _format_default(tool, action, data, limit=TIME_SERIES_N)
+
+
+def format_coinglass_etf(action: str, data: Any) -> str:
+    tool = "coinglass_etf"
+
+    if action in {"flows", "bitcoin_flows", "ethereum_flows", "solana_flows"}:
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["date", "flow_usd", "total_assets"],
+            lambda r: [
+                str(_pick(r, "date", "day") or _to_utc(_find_time_value(r))),
+                _fmt_num(_pick(r, "flow", "flow_usd", "net_flow", "netFlow")),
+                _fmt_num(_pick(r, "total_assets", "assets", "aum")),
+            ],
+            limit=5,
+        )
+
+    if action in {"list", "bitcoin_list", "ethereum_list"}:
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["fund", "ticker", "assets", "flow_24h"],
+            lambda r: [
+                str(_pick(r, "fund", "name", "issuer") or "-"),
+                str(_pick(r, "ticker", "symbol") or "-"),
+                _fmt_num(_pick(r, "assets", "aum", "total_assets")),
+                _fmt_num(_pick(r, "flow_24h", "flow", "net_flow", "netFlow")),
+            ],
+            sort_keys=("assets", "aum", "total_assets"),
+        )
+
+    return _format_default(tool, action, data, limit=5)
+
+
+def format_coinglass_grayscale(action: str, data: Any) -> str:
+    tool = "coinglass_grayscale"
+
+    if action == "holdings":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["fund", "shares", "nav", "premium"],
+            lambda r: [
+                str(_pick(r, "fund", "ticker", "symbol") or "-"),
+                _fmt_num(_pick(r, "shares", "share_count", "shareCount")),
+                _fmt_num(_pick(r, "nav", "net_asset_value", "netAssetValue")),
+                _fmt_pct(_pick(r, "premium", "premium_discount", "premiumDiscount")),
+            ],
+            sort_keys=("nav", "net_asset_value", "netAssetValue"),
+        )
+
+    if action == "premium":
+        return _format_last_points(
+            tool,
+            action,
+            data,
+            ["time", "premium"],
+            lambda r: [
+                _to_utc(_find_time_value(r)),
+                _fmt_pct(_pick(r, "premium", "premium_discount", "value")),
+            ],
+        )
+
+    raise ValueError(f"No formatter action for {tool}:{action}")
+
+
+def format_coinglass_indicators(action: str, data: Any) -> str:
+    tool = "coinglass_indicators"
+
+    if action == "fear_greed":
+        rows = _records(data)
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        current = rows[-1]
+        lines = [
+            _header(tool, action, data),
+            (
+                "current="
+                f"value:{_fmt_num(_pick(current, 'value', 'fear_greed', 'index'), use_suffix=False)}, "
+                f"classification:{_pick(current, 'classification', 'class') or '-'}"
+            ),
+        ]
+        tail = rows[-7:]
+        lines += _render_table(
+            ["time", "value", "classification"],
+            [
+                [
+                    str(_pick(r, "date") or _to_utc(_find_time_value(r))),
+                    _fmt_num(_pick(r, "value", "fear_greed", "index"), use_suffix=False),
+                    str(_pick(r, "classification", "class") or "-"),
+                ]
+                for r in tail
+            ],
+        )
+        return _truncate(lines, total_items=len(rows), shown_items=len(tail))
+
+    if action == "rsi":
+        return _format_generic_top(
+            tool,
+            action,
+            data,
+            ["symbol", "rsi"],
+            lambda r: [
+                str(_pick(r, "symbol", "coin") or "-"),
+                _fmt_num(_pick(r, "rsi", "value"), use_suffix=False),
+            ],
+            sort_keys=("rsi", "value"),
+        )
+
+    rows = _as_timeseries_rows(data)
+    if not rows:
+        return _format_default(tool, action, data, limit=TIME_SERIES_N)
+
+    tail = rows[-TIME_SERIES_N:]
+
+    # Multi-value indicators keep all major sub-values.
+    if action in {"futures_macd", "futures_boll"}:
+        keys = sorted(
+            k
+            for k in {kk for row in tail for kk in row.keys()}
+            if k not in {"t", "ts", "time", "timestamp", "date", "datetime"}
+        )[:6]
+        headers = ["time"] + keys
+        table_rows = []
+        for row in tail:
+            table_rows.append([
+                _to_utc(_find_time_value(row)),
+                *[
+                    _fmt_num(row.get(key), use_suffix=False)
+                    if _as_float(row.get(key)) is not None
+                    else str(row.get(key) if row.get(key) is not None else "-")
+                    for key in keys
+                ],
+            ])
+        lines = [_header(tool, action, data)] + _render_table(headers, table_rows)
+        return _truncate(lines, total_items=len(rows), shown_items=len(tail))
+
+    # Default single-value indicator.
+    return _format_last_points(
+        tool,
+        action,
+        data,
+        ["time", "value"],
+        lambda r: [
+            _to_utc(_find_time_value(r)),
+            _fmt_num(_pick(r, "value", "c", "close", "index"), use_suffix=False),
+        ],
+    )
+
+
+def format_coinglass_search(action: str, data: Any) -> str:
+    return _format_passthrough("coinglass_search", action, data)
+
+
+def format_coinglass_config(action: str, data: Any) -> str:
+    return _format_passthrough("coinglass_config", action, data)
+
