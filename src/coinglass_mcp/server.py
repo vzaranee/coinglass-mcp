@@ -175,6 +175,25 @@ async def request_with_fallback(
     raise ValueError("No endpoints provided for request fallback")
 
 
+# Canonical OpenAPI v4 paths for historically brittle endpoints.
+ENDPOINT_PRICE_OHLC_HISTORY = "/api/futures/price/history"
+ENDPOINT_OI_AGGREGATED_OHLC_HISTORY = "/api/futures/open-interest/aggregated-history"
+ENDPOINT_FUNDING_ACCUMULATED_HISTORY = (
+    "/api/futures/funding-rate/accumulated-exchange-list"
+)
+ENDPOINT_FUNDING_OI_WEIGHTED_OHLC_HISTORY = (
+    "/api/futures/funding-rate/oi-weight-history"
+)
+ENDPOINT_LIQ_AGGREGATED_HISTORY = "/api/futures/liquidation/aggregated-history"
+ENDPOINT_ORDERBOOK_AGGREGATED_ASK_BIDS_HISTORY = (
+    "/api/futures/orderbook/aggregated-ask-bids-history"
+)
+ENDPOINT_BITFINEX_LONG_SHORT_HISTORY = "/api/bitfinex-margin-long-short"
+ENDPOINT_ONCHAIN_BALANCE_LIST = "/api/exchange/balance/list"
+ENDPOINT_ONCHAIN_WHALE_TRANSFER = "/api/chain/v2/whale-transfer"
+ENDPOINT_HYPERLIQUID_WHALE_ALERTS = "/api/hyperliquid/whale-alert"
+
+
 # ============================================================================
 # ARTICLE & CALENDAR TOOLS (2 tools)
 # ============================================================================
@@ -456,7 +475,7 @@ async def coinglass_price_history(
     client = get_client(ctx)
 
     data = await client.request(
-        "/api/futures/price/history",
+        ENDPOINT_PRICE_OHLC_HISTORY,
         {
             "exchange": exchange,
             "symbol": pair,
@@ -549,7 +568,7 @@ async def coinglass_oi_history(
 
     endpoints = {
         "pair": "/api/futures/open-interest/history",
-        "aggregated": "/api/futures/open-interest/aggregated-history",
+        "aggregated": ENDPOINT_OI_AGGREGATED_OHLC_HISTORY,
         "stablecoin": "/api/futures/open-interest/aggregated-stablecoin-history",
         "coin_margin": "/api/futures/open-interest/aggregated-coin-margin-history",
     }
@@ -702,7 +721,7 @@ async def coinglass_funding_history(
 
     endpoints = {
         "pair": "/api/futures/funding-rate/history",
-        "oi_weighted": "/api/futures/funding-rate/oi-weight-history",
+        "oi_weighted": ENDPOINT_FUNDING_OI_WEIGHTED_OHLC_HISTORY,
         "vol_weighted": "/api/futures/funding-rate/vol-weight-history",
     }
 
@@ -770,14 +789,16 @@ async def coinglass_funding_current(
 
     endpoints = {
         "rates": "/api/futures/funding-rate/exchange-list",
-        "accumulated": "/api/futures/funding-rate/accumulated-exchange-list",
+        "accumulated": ENDPOINT_FUNDING_ACCUMULATED_HISTORY,
         "arbitrage": "/api/futures/funding-rate/arbitrage",
     }
 
-    params = {
-        "symbol": symbol,
-        "range": range if action == "accumulated" else None,
-    }
+    if action == "accumulated" and not range:
+        raise ValueError(
+            "Action 'accumulated' requires range (e.g., '7d' or '30d')."
+        )
+
+    params = {"range": range} if action == "accumulated" else {"symbol": symbol}
     data = await client.request(endpoints[action], params)
 
     return ok(action, data, symbol=symbol, range=range)
@@ -952,11 +973,18 @@ async def coinglass_liq_history(
     """
     if action in {"pair", "aggregated"}:
         check_interval(ctx, interval)
+    if action == "pair" and (not exchange or not pair):
+        raise ValueError(
+            "Action 'pair' requires exchange + pair "
+            "(e.g., exchange='Binance', pair='BTCUSDT')."
+        )
+    if action == "aggregated" and not symbol:
+        raise ValueError("Action 'aggregated' requires symbol (e.g., symbol='BTC').")
     client = get_client(ctx)
 
     endpoints = {
         "pair": "/api/futures/liquidation/history",
-        "aggregated": "/api/futures/liquidation/aggregated-history",
+        "aggregated": ENDPOINT_LIQ_AGGREGATED_HISTORY,
         "by_coin": "/api/futures/liquidation/coin-list",
         "by_exchange": "/api/futures/liquidation/exchange-list",
         "max_pain": "/api/futures/liquidation/max-pain",
@@ -1192,11 +1220,18 @@ async def coinglass_ob_history(
         - Aggregated BTC depth: action="coin_depth", symbol="BTC"
     """
     check_interval(ctx, interval)
+    if action == "pair_depth" and (not exchange or not pair):
+        raise ValueError(
+            "Action 'pair_depth' requires exchange + pair "
+            "(e.g., exchange='Binance', pair='BTCUSDT')."
+        )
+    if action == "coin_depth" and not symbol:
+        raise ValueError("Action 'coin_depth' requires symbol (e.g., symbol='BTC').")
     client = get_client(ctx)
 
     endpoints = {
         "pair_depth": "/api/futures/orderbook/ask-bids-history",
-        "coin_depth": "/api/futures/orderbook/aggregated-ask-bids-history",
+        "coin_depth": ENDPOINT_ORDERBOOK_AGGREGATED_ASK_BIDS_HISTORY,
         "heatmap": "/api/futures/orderbook/history",
     }
 
@@ -1440,12 +1475,12 @@ async def coinglass_whale_positions(
     client = get_client(ctx)
 
     endpoints = {
-        "alerts": "/api/hyperliquid/whale-alert",
+        "alerts": ENDPOINT_HYPERLIQUID_WHALE_ALERTS,
         "positions": "/api/hyperliquid/whale-position",
         "all_positions": "/api/hyperliquid/position",
     }
 
-    params = {"symbol": symbol, "user": user, "page": page}
+    params = {} if action == "alerts" else {"symbol": symbol, "user": user, "page": page}
     data = await client.request(endpoints[action], params)
 
     return ok(action, data, symbol=symbol, page=page)
@@ -1481,7 +1516,7 @@ async def coinglass_bitfinex_longs_shorts(
     """
     client = get_client(ctx)
     data = await client.request(
-        "/api/bitfinex-margin-long-short", {"symbol": symbol, "interval": interval}
+        ENDPOINT_BITFINEX_LONG_SHORT_HISTORY, {"symbol": symbol, "interval": interval}
     )
     return ok("bitfinex_margin", data, symbol=symbol, interval=interval)
 
@@ -1996,13 +2031,17 @@ async def coinglass_onchain(
         - Balance history: action="balance_chart", asset="BTC", exchange="Binance"
     """
     client = get_client(ctx)
+    if action == "balance_list" and not symbol:
+        raise ValueError(
+            "Action 'balance_list' requires symbol (e.g., symbol='BTC')."
+        )
 
     endpoints = {
         "assets": "/api/exchange/assets",
-        "balance_list": "/api/exchange/balance/list",
+        "balance_list": ENDPOINT_ONCHAIN_BALANCE_LIST,
         "balance_chart": "/api/exchange/balance/chart",
         "transfers": "/api/exchange/chain/tx/list",
-        "whale_transfer": "/api/chain/v2/whale-transfer",
+        "whale_transfer": ENDPOINT_ONCHAIN_WHALE_TRANSFER,
         "assets_transparency": "/api/exchange_assets_transparency/list",
     }
 
@@ -2015,7 +2054,7 @@ async def coinglass_onchain(
         "symbol": (
             symbol
             if action in {"assets", "balance_list"}
-            else asset if action == "whale_transfer" else None
+            else (symbol or asset) if action == "whale_transfer" else None
         ),
         "start_time": start_time if action == "whale_transfer" else None,
         "end_time": end_time if action == "whale_transfer" else None,
