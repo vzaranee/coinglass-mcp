@@ -404,7 +404,14 @@ async def coinglass_article(
     ] = None,
     ctx: Context = None,
 ) -> dict:
-    """Get CoinGlass article feed."""
+    """Get CoinGlass article feed.
+
+    Returns crypto news articles from CoinGlass.
+
+    Examples:
+        - Latest articles: action="list"
+        - English articles: action="list", language="en"
+    """
     client = get_client(ctx)
     data = await client.request(
         "/api/article/list",
@@ -450,7 +457,15 @@ async def coinglass_calendar(
     ] = None,
     ctx: Context = None,
 ) -> dict:
-    """Get CoinGlass calendar and macro-event data."""
+    """Get CoinGlass calendar and macro-event data.
+
+    Returns upcoming economic events, central bank activities, and financial events.
+
+    Examples:
+        - Central bank events: action="central_bank_activities"
+        - Macro releases: action="economic_data", language="en"
+        - Market events: action="financial_events"
+    """
     client = get_client(ctx)
     endpoints: dict[ActionCalendar, str] = {
         "central_bank_activities": "/api/calendar/central-bank-activities",
