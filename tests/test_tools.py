@@ -31,6 +31,16 @@ def get_fn(tool):
     return tool.fn if hasattr(tool, "fn") else tool
 
 
+def assert_text_result(result, *expected_substrings):
+    """Assert tool response uses text format and contains expected content."""
+    assert "text" in result
+    text = result["text"]
+    assert isinstance(text, str)
+    for expected in expected_substrings:
+        assert expected in text
+    return text
+
+
 class TestHelperFunctions:
     """Test helper functions."""
 
@@ -92,10 +102,13 @@ class TestMarketTools:
         fn = get_fn(coinglass_market_info)
         result = await fn("coins", ctx=ctx)
 
-        assert result["success"] is True
-        assert result["action"] == "coins"
-        assert result["data"] == ["BTC", "ETH", "SOL"]
-        assert result["metadata"]["total"] == 3
+        assert_text_result(
+            result,
+            "coinglass_market_info(coins)",
+            "BTC",
+            "ETH",
+            "SOL",
+        )
 
     async def test_market_info_exchanges(self, setup_context, mock_response):
         """coinglass_market_info returns exchanges."""
@@ -108,9 +121,12 @@ class TestMarketTools:
         fn = get_fn(coinglass_market_info)
         result = await fn("exchanges", ctx=ctx)
 
-        assert result["success"] is True
-        assert result["action"] == "exchanges"
-        assert set(result["data"]) == {"Binance", "OKX"}
+        assert_text_result(
+            result,
+            "coinglass_market_info(exchanges)",
+            "Binance",
+            "OKX",
+        )
 
     async def test_market_data_coins_summary(self, setup_context, mock_response):
         """coinglass_market_data returns coins summary for a symbol."""
@@ -120,8 +136,7 @@ class TestMarketTools:
         fn = get_fn(coinglass_market_data)
         result = await fn("coins_summary", symbol="BTC", ctx=ctx)
 
-        assert result["success"] is True
-        assert result["data"]["symbol"] == "BTC"
+        assert_text_result(result, "coinglass_market_data(coins_summary)", "BTC")
 
     async def test_market_data_coins_summary_requires_symbol(self, setup_context):
         """coinglass_market_data coins_summary requires symbol."""
@@ -142,8 +157,12 @@ class TestMarketTools:
         fn = get_fn(coinglass_market_data)
         result = await fn("pairs_summary", ctx=ctx)
 
-        assert result["success"] is True
-        assert len(result["data"]) == 2
+        assert_text_result(
+            result,
+            "coinglass_market_data(pairs_summary)",
+            "BTCUSDT",
+            "ETHUSDT",
+        )
 
     async def test_price_history(self, setup_context, mock_response):
         """coinglass_price_history returns OHLC data."""
@@ -160,9 +179,11 @@ class TestMarketTools:
             ctx=ctx,
         )
 
-        assert result["success"] is True
-        assert result["action"] == "price_history"
-        assert result["metadata"]["exchange"] == "Binance"
+        assert_text_result(
+            result,
+            "coinglass_price_history(price_history)",
+            "50000.00",
+        )
 
     async def test_price_history_interval_check(self, setup_context, mock_response):
         """coinglass_price_history checks interval restriction."""
@@ -207,8 +228,7 @@ class TestDerivativesTools:
             ctx=ctx,
         )
 
-        assert result["success"] is True
-        assert result["action"] == "aggregated"
+        assert_text_result(result, "coinglass_oi_history(aggregated)", "10.50K")
 
     async def test_oi_history_pair_requires_params(self, setup_context):
         """coinglass_oi_history pair action requires exchange+pair."""
@@ -233,8 +253,12 @@ class TestDerivativesTools:
             ctx=ctx,
         )
 
-        assert result["success"] is True
-        assert len(result["data"]) == 2
+        assert_text_result(
+            result,
+            "coinglass_oi_distribution(by_exchange)",
+            "Binance",
+            "OKX",
+        )
 
     async def test_funding_history(self, setup_context, mock_response):
         """coinglass_funding_history returns funding OHLC."""
@@ -250,8 +274,7 @@ class TestDerivativesTools:
             ctx=ctx,
         )
 
-        assert result["success"] is True
-        assert result["action"] == "oi_weighted"
+        assert_text_result(result, "coinglass_funding_history(oi_weighted)", "0.01%")
 
     async def test_funding_current_rates(self, setup_context, mock_response):
         """coinglass_funding_current returns current rates."""
@@ -263,8 +286,7 @@ class TestDerivativesTools:
         fn = get_fn(coinglass_funding_current)
         result = await fn(action="rates", ctx=ctx)
 
-        assert result["success"] is True
-        assert result["action"] == "rates"
+        assert_text_result(result, "coinglass_funding_current(rates)", "BTC")
 
     async def test_long_short(self, setup_context, mock_response):
         """coinglass_long_short returns ratio data."""
@@ -281,8 +303,7 @@ class TestDerivativesTools:
             ctx=ctx,
         )
 
-        assert result["success"] is True
-        assert result["action"] == "global"
+        assert_text_result(result, "coinglass_long_short(global)", "52.00%", "48.00%")
 
 
 class TestLiquidationTools:
@@ -314,7 +335,7 @@ class TestLiquidationTools:
             ctx=ctx,
         )
 
-        assert result["success"] is True
+        assert_text_result(result, "coinglass_liq_history(aggregated)", "1.00M")
 
     async def test_liq_orders_requires_plan(self, setup_context):
         """coinglass_liq_orders requires standard+ plan."""
@@ -334,8 +355,7 @@ class TestLiquidationTools:
         fn = get_fn(coinglass_liq_orders)
         result = await fn(ctx=ctx)
 
-        assert result["success"] is True
-        assert result["action"] == "orders"
+        assert_text_result(result, "coinglass_liq_orders(orders)", "price_range")
 
 
 class TestWhaleTools:
@@ -373,7 +393,7 @@ class TestWhaleTools:
         fn = get_fn(coinglass_whale_positions)
         result = await fn(action="positions", ctx=ctx)
 
-        assert result["success"] is True
+        assert_text_result(result, "coinglass_whale_positions(positions)", "0x123", "BTC")
 
 
 class TestTakerTools:
@@ -405,7 +425,7 @@ class TestTakerTools:
             ctx=ctx,
         )
 
-        assert result["success"] is True
+        assert_text_result(result, "coinglass_taker(coin_history)", "55.56%")
 
 
 class TestIndicatorTools:
@@ -433,8 +453,7 @@ class TestIndicatorTools:
         fn = get_fn(coinglass_indicators)
         result = await fn(action="fear_greed", ctx=ctx)
 
-        assert result["success"] is True
-        assert result["action"] == "fear_greed"
+        assert_text_result(result, "coinglass_indicators(fear_greed)", "Greed", "75.00")
 
     async def test_rsi(self, setup_context, mock_response):
         """coinglass_indicators returns RSI data."""
@@ -446,7 +465,7 @@ class TestIndicatorTools:
         fn = get_fn(coinglass_indicators)
         result = await fn(action="rsi", ctx=ctx)
 
-        assert result["success"] is True
+        assert_text_result(result, "coinglass_indicators(rsi)", "BTC", "65.50")
 
 
 class TestMetaTools:
@@ -471,9 +490,7 @@ class TestMetaTools:
         fn = get_fn(coinglass_search)
         result = await fn(query="liquidation", ctx=ctx)
 
-        assert result["success"] is True
-        tool_names = [m["tool"] for m in result["data"]["matches"]]
-        assert any("liq" in name for name in tool_names)
+        assert_text_result(result, "coinglass_search(search)", "coinglass_liq")
 
     async def test_search_finds_funding_tools(self, setup_context):
         """coinglass_search finds funding tools."""
@@ -482,9 +499,7 @@ class TestMetaTools:
         fn = get_fn(coinglass_search)
         result = await fn(query="funding rate arbitrage", ctx=ctx)
 
-        assert result["success"] is True
-        tool_names = [m["tool"] for m in result["data"]["matches"]]
-        assert any("funding" in name for name in tool_names)
+        assert_text_result(result, "coinglass_search(search)", "coinglass_funding")
 
     async def test_config_exchanges(self, setup_context):
         """coinglass_config returns exchange list."""
@@ -493,10 +508,13 @@ class TestMetaTools:
         fn = get_fn(coinglass_config)
         result = await fn(action="exchanges", ctx=ctx)
 
-        assert result["success"] is True
-        assert "futures" in result["data"]
-        assert "spot" in result["data"]
-        assert "Binance" in result["data"]["futures"]
+        assert_text_result(
+            result,
+            "coinglass_config(exchanges)",
+            '"futures"',
+            '"spot"',
+            "Binance",
+        )
 
     async def test_config_intervals(self, setup_context):
         """coinglass_config returns intervals for plan."""
@@ -505,9 +523,11 @@ class TestMetaTools:
         fn = get_fn(coinglass_config)
         result = await fn(action="intervals", ctx=ctx)
 
-        assert result["success"] is True
-        assert "h4" in result["data"]["your_plan"]
-        assert "m5" not in result["data"]["your_plan"]  # Not for hobbyist
+        assert_text_result(
+            result,
+            "coinglass_config(intervals)",
+            '"your_plan": ["d1", "h12", "h4", "h8", "w1"]',
+        )
 
     async def test_config_plan_features(self, setup_context):
         """coinglass_config returns plan features."""
@@ -516,6 +536,9 @@ class TestMetaTools:
         fn = get_fn(coinglass_config)
         result = await fn(action="plan_features", ctx=ctx)
 
-        assert result["success"] is True
-        assert result["data"]["plan"] == "standard"
-        assert "liq_orders" in result["data"]["features"]
+        assert_text_result(
+            result,
+            "coinglass_config(plan_features)",
+            '"plan": "standard"',
+            "liq_orders",
+        )
