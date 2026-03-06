@@ -175,6 +175,154 @@ async def request_with_fallback(
     raise ValueError("No endpoints provided for request fallback")
 
 
+_COMMON_QUOTES = (
+    "USDT",
+    "USDC",
+    "FDUSD",
+    "BUSD",
+    "DAI",
+    "USD",
+    "BTC",
+    "ETH",
+    "EUR",
+    "JPY",
+    "GBP",
+    "TRY",
+    "BRL",
+    "AUD",
+)
+_CONTRACT_SUFFIXES = ("-SWAP", "_SWAP", "-PERP", "_PERP")
+_SUPPORTED_PAIR_INDEX_CACHE: dict[str, dict[str, str]] | None = None
+
+
+def _normalize_exchange_key(exchange: str) -> str:
+    """Normalize exchange names for case/punctuation-insensitive lookup."""
+    return "".join(ch for ch in exchange.strip().lower() if ch.isalnum())
+
+
+def _extract_base_quote(symbol: str) -> tuple[str, str] | None:
+    """Extract base/quote from common futures instrument formats."""
+    cleaned = symbol.strip().upper().replace("/", "-")
+    if not cleaned:
+        return None
+
+    for suffix in _CONTRACT_SUFFIXES:
+        if cleaned.endswith(suffix):
+            cleaned = cleaned[: -len(suffix)]
+            break
+
+    for delimiter in ("-", "_"):
+        if delimiter not in cleaned:
+            continue
+        parts = [part for part in cleaned.split(delimiter) if part]
+        if len(parts) >= 3 and parts[2] in {"SWAP", "PERP"}:
+            return parts[0], parts[1]
+        if len(parts) == 2 and parts[1] in {"SWAP", "PERP"}:
+            return _extract_base_quote(parts[0])
+        if len(parts) >= 2:
+            return parts[0], parts[1]
+
+    for quote in _COMMON_QUOTES:
+        if cleaned.endswith(quote) and len(cleaned) > len(quote):
+            return cleaned[: -len(quote)], quote
+
+    return None
+
+
+def _instrument_candidates(exchange: str | None, pair: str) -> list[str]:
+    """Build likely instrument_id candidates, prioritizing exchange conventions."""
+    raw = pair.strip()
+    if not raw:
+        return []
+
+    exchange_key = _normalize_exchange_key(exchange or "")
+    upper_raw = raw.upper()
+    candidates: list[str] = []
+    base_quote = _extract_base_quote(upper_raw)
+    if base_quote:
+        base, quote = base_quote
+        compact = f"{base}{quote}"
+        dashed = f"{base}-{quote}"
+        underscored = f"{base}_{quote}"
+        okx_swap = f"{base}-{quote}-SWAP"
+        if exchange_key == "okx":
+            candidates.extend([okx_swap, dashed, compact, underscored])
+        elif exchange_key == "gate":
+            candidates.extend([underscored, compact, dashed, okx_swap])
+        else:
+            candidates.extend([compact, dashed, underscored, okx_swap])
+
+    candidates.extend([raw, upper_raw])
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = candidate.upper()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+async def _get_supported_pair_index(client: CoinGlassClient) -> dict[str, dict[str, str]]:
+    """Load exchange->instrument_id index from supported pairs endpoint."""
+    global _SUPPORTED_PAIR_INDEX_CACHE
+    if _SUPPORTED_PAIR_INDEX_CACHE is not None:
+        return _SUPPORTED_PAIR_INDEX_CACHE
+
+    data = await client.request("/api/futures/supported-exchange-pairs")
+    index: dict[str, dict[str, str]] = {}
+    if isinstance(data, dict):
+        for exchange_name, instruments in data.items():
+            if not isinstance(exchange_name, str):
+                continue
+            key = _normalize_exchange_key(exchange_name)
+            instrument_map: dict[str, str] = {}
+            if isinstance(instruments, list):
+                for instrument in instruments:
+                    if not isinstance(instrument, dict):
+                        continue
+                    instrument_id = instrument.get("instrument_id") or instrument.get(
+                        "instrumentId"
+                    )
+                    if isinstance(instrument_id, str) and instrument_id:
+                        instrument_map[instrument_id.upper()] = instrument_id
+            index[key] = instrument_map
+    _SUPPORTED_PAIR_INDEX_CACHE = index
+    return index
+
+
+async def resolve_instrument_id(
+    client: CoinGlassClient, exchange: str | None, pair: str | None
+) -> str | None:
+    """Map a generic pair (e.g. ETHUSDT) to exchange-specific instrument_id."""
+    if not pair:
+        return pair
+
+    candidates = _instrument_candidates(exchange, pair)
+    if not exchange or not candidates:
+        return pair
+
+    exchange_key = _normalize_exchange_key(exchange)
+    try:
+        index = await _get_supported_pair_index(client)
+    except Exception:
+        # Fallback to best-effort formatting if supported-pairs lookup fails.
+        return candidates[0]
+
+    instruments = index.get(exchange_key)
+    if not instruments:
+        return candidates[0]
+
+    for candidate in candidates:
+        match = instruments.get(candidate.upper())
+        if match:
+            return match
+
+    return candidates[0]
+
+
 # Canonical OpenAPI v4 paths for historically brittle endpoints.
 ENDPOINT_PRICE_OHLC_HISTORY = "/api/futures/price/history"
 ENDPOINT_OI_AGGREGATED_OHLC_HISTORY = "/api/futures/open-interest/aggregated-history"
@@ -1341,6 +1489,9 @@ async def coinglass_ob_large_orders(
 
     Detects significant limit orders that may act as support/resistance.
     Thresholds: BTC >= $1M, ETH >= $500K, others >= $50K.
+    CoinGlass `order_side` semantics for large-limit-order payloads:
+    - 1 = ask/sell
+    - 2 = bid/buy
 
     Examples:
         - Current whale walls: action="current"
@@ -1349,8 +1500,9 @@ async def coinglass_ob_large_orders(
     client = get_client(ctx)
 
     if action == "current":
+        resolved_symbol = await resolve_instrument_id(client, exchange, symbol or pair)
         endpoint = "/api/futures/orderbook/large-limit-order"
-        params = {"exchange": exchange, "symbol": symbol or pair, "limit": limit}
+        params = {"exchange": exchange, "symbol": resolved_symbol, "limit": limit}
     elif action == "history":
         history_symbol = symbol or pair
         missing: list[str] = []
@@ -1368,10 +1520,11 @@ async def coinglass_ob_large_orders(
             raise ValueError(
                 "Action 'history' requires parameters: " + ", ".join(missing)
             )
+        resolved_symbol = await resolve_instrument_id(client, exchange, history_symbol)
         endpoint = "/api/futures/orderbook/large-limit-order-history"
         params = {
             "exchange": exchange,
-            "symbol": history_symbol,
+            "symbol": resolved_symbol,
             "state": state,
             "start_time": start_time,
             "end_time": end_time,
@@ -1641,7 +1794,7 @@ async def coinglass_taker(
                 "Action 'aggregated_ratio' is only available for futures market"
             )
         params = {
-            "exchange_list": exchange or "Binance",
+            "exchange_list": exchange_list or exchange or "Binance",
             "symbol": symbol,
             "interval": interval,
             "limit": limit,
