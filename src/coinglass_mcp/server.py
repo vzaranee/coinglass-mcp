@@ -176,6 +176,108 @@ async def request_with_fallback(
 
 
 # ============================================================================
+# ARTICLE & CALENDAR TOOLS (2 tools)
+# ============================================================================
+
+
+ActionArticle = Literal["list"]
+
+
+@mcp.tool(
+    name="coinglass_article",
+    annotations={
+        "title": "CoinGlass Articles",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def coinglass_article(
+    action: Annotated[
+        ActionArticle,
+        Field(description="list: news/article list"),
+    ] = "list",
+    language: Annotated[
+        str | None, Field(description="Language code (e.g., en)")
+    ] = None,
+    page: Annotated[
+        int | None, Field(ge=1, description="Page number")
+    ] = None,
+    per_page: Annotated[
+        int | None, Field(ge=1, le=100, description="Items per page")
+    ] = None,
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp in milliseconds")
+    ] = None,
+    end_time: Annotated[
+        int | None, Field(description="End timestamp in milliseconds")
+    ] = None,
+    ctx: Context = None,
+) -> dict:
+    """Get CoinGlass article feed."""
+    client = get_client(ctx)
+    data = await client.request(
+        "/api/article/list",
+        {
+            "language": language,
+            "page": page,
+            "per_page": per_page,
+            "start_time": start_time,
+            "end_time": end_time,
+        },
+    )
+    return ok(action, data, page=page, per_page=per_page, language=language)
+
+
+ActionCalendar = Literal["central_bank_activities", "economic_data", "financial_events"]
+
+
+@mcp.tool(
+    name="coinglass_calendar",
+    annotations={
+        "title": "CoinGlass Calendar",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True,
+    },
+)
+async def coinglass_calendar(
+    action: Annotated[
+        ActionCalendar,
+        Field(
+            description="central_bank_activities: central bank calendar | economic_data: macro releases | financial_events: market events"
+        ),
+    ],
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp in milliseconds")
+    ] = None,
+    end_time: Annotated[
+        int | None, Field(description="End timestamp in milliseconds")
+    ] = None,
+    language: Annotated[
+        str | None, Field(description="Language code for economic_data (e.g., en)")
+    ] = None,
+    ctx: Context = None,
+) -> dict:
+    """Get CoinGlass calendar and macro-event data."""
+    client = get_client(ctx)
+    endpoints: dict[ActionCalendar, str] = {
+        "central_bank_activities": "/api/calendar/central-bank-activities",
+        "economic_data": "/api/calendar/economic-data",
+        "financial_events": "/api/calendar/financial-events",
+    }
+    params = {
+        "start_time": start_time,
+        "end_time": end_time,
+        "language": language if action == "economic_data" else None,
+    }
+    data = await client.request(endpoints[action], params)
+    return ok(action, data, start_time=start_time, end_time=end_time, language=language)
+
+
+# ============================================================================
 # MARKET TOOLS (3 tools)
 # ============================================================================
 
@@ -1508,7 +1610,14 @@ async def coinglass_options(
 # ============================================================================
 
 
-ActionOnChain = Literal["assets", "balance_list", "balance_chart", "transfers"]
+ActionOnChain = Literal[
+    "assets",
+    "balance_list",
+    "balance_chart",
+    "transfers",
+    "whale_transfer",
+    "assets_transparency",
+]
 
 
 @mcp.tool(
@@ -1525,7 +1634,7 @@ async def coinglass_onchain(
     action: Annotated[
         ActionOnChain,
         Field(
-            description="assets: exchange holdings | balance_list: balances by asset | balance_chart: historical | transfers: ERC-20 transactions"
+            description="assets: exchange holdings | balance_list: balances by asset | balance_chart: historical | transfers: ERC-20 transactions | whale_transfer: large on-chain transfers | assets_transparency: exchange proof-of-assets list"
         ),
     ],
     exchange: Annotated[str | None, Field(description="Exchange filter")] = None,
@@ -1538,6 +1647,12 @@ async def coinglass_onchain(
     transfer_type: Annotated[
         Literal["inflow", "outflow", "internal"] | None,
         Field(description="Filter transfers by type"),
+    ] = None,
+    start_time: Annotated[
+        int | None, Field(description="Start timestamp in milliseconds")
+    ] = None,
+    end_time: Annotated[
+        int | None, Field(description="End timestamp in milliseconds")
     ] = None,
     limit: Annotated[
         int, Field(ge=1, le=100, description="Number of records")
@@ -1562,6 +1677,8 @@ async def coinglass_onchain(
         "balance_list": "/api/exchange/balance/list",
         "balance_chart": "/api/exchange/balance/chart",
         "transfers": "/api/exchange/chain/tx/list",
+        "whale_transfer": "/api/chain/v2/whale-transfer",
+        "assets_transparency": "/api/exchange_assets_transparency/list",
     }
 
     params = {
@@ -1570,6 +1687,9 @@ async def coinglass_onchain(
         "range": range,
         "type": transfer_type,
         "limit": limit,
+        "symbol": asset if action == "whale_transfer" else None,
+        "start_time": start_time if action == "whale_transfer" else None,
+        "end_time": end_time if action == "whale_transfer" else None,
     }
 
     data = await client.request(endpoints[action], params)
