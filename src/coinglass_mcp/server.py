@@ -1717,6 +1717,12 @@ ActionETF = Literal[
     "bitcoin_premium_discount",
     "bitcoin_detail",
     "bitcoin_price",
+    "ethereum_list",
+    "ethereum_flows",
+    "ethereum_net_assets",
+    "solana_flows",
+    "xrp_flows",
+    "hk_bitcoin_flows",
 ]
 
 
@@ -1791,16 +1797,60 @@ async def coinglass_etf(
         "bitcoin_premium_discount": "/api/etf/bitcoin/premium-discount/history",
         "bitcoin_detail": "/api/etf/bitcoin/detail",
         "bitcoin_price": "/api/etf/bitcoin/price/history",
+        "ethereum_list": "/api/etf/ethereum/list",
+        "ethereum_flows": "/api/etf/ethereum/flow-history",
+        "ethereum_net_assets": "/api/etf/ethereum/net-assets/history",
+        "solana_flows": "/api/etf/solana/flow-history",
+        "xrp_flows": "/api/etf/xrp/flow-history",
+        "hk_bitcoin_flows": "/api/hk-etf/bitcoin/flow-history",
     }
 
-    asset_value = "bitcoin" if action.startswith("bitcoin_") else asset
-    params = {
-        "ticker": ticker,
-        "region": region,
-        "range": range or ("7d" if action in {"price", "bitcoin_price"} else None),
-        "interval": interval,
-        "limit": limit,
+    explicit_asset = {
+        "bitcoin": {
+            "bitcoin_list",
+            "bitcoin_flows",
+            "bitcoin_history",
+            "bitcoin_net_assets",
+            "bitcoin_premium_discount",
+            "bitcoin_detail",
+            "bitcoin_price",
+            "hk_bitcoin_flows",
+        },
+        "ethereum": {"ethereum_list", "ethereum_flows", "ethereum_net_assets"},
+        "solana": {"solana_flows"},
+        "xrp": {"xrp_flows"},
     }
+
+    if action in explicit_asset["bitcoin"]:
+        asset_value = "bitcoin"
+    elif action in explicit_asset["ethereum"]:
+        asset_value = "ethereum"
+    elif action in explicit_asset["solana"]:
+        asset_value = "solana"
+    elif action in explicit_asset["xrp"]:
+        asset_value = "xrp"
+    else:
+        asset_value = asset
+
+    no_param_actions = {
+        "ethereum_list",
+        "ethereum_flows",
+        "ethereum_net_assets",
+        "solana_flows",
+        "xrp_flows",
+        "hk_bitcoin_flows",
+    }
+
+    if action in no_param_actions:
+        params = None
+    else:
+        params = {
+            "ticker": ticker,
+            "region": region,
+            "range": range or ("7d" if action in {"price", "bitcoin_price"} else None),
+            "interval": interval,
+            "limit": limit,
+        }
 
     data = await request_with_fallback(client, endpoints[action], params)
 
