@@ -144,7 +144,7 @@ def check_params(action: str, **kwargs: Any) -> None:
 
 
 def ok(action: str, data: Any, **meta: Any) -> dict:
-    """Create success response."""
+    """Create formatted success response with compact text for LLM consumption."""
     caller = inspect.currentframe().f_back
     tool_name = caller.f_code.co_name if caller else "unknown_tool"
 
@@ -153,13 +153,7 @@ def ok(action: str, data: Any, **meta: Any) -> dict:
     except Exception as exc:
         text = formatters.format_json_fallback(tool_name, action, data, reason=str(exc))
 
-    return {
-        "success": True,
-        "action": action,
-        "data": data,
-        "text": text,
-        "metadata": {k: v for k, v in meta.items() if v is not None},
-    }
+    return {"text": text}
 
 
 async def request_with_fallback(
