@@ -129,6 +129,13 @@ def _fmt_pct(value: Any, ratio_input: bool = False) -> str:
     return f"{pct:.2f}%"
 
 
+def _fmt_pct_auto(value: Any) -> str:
+    number = _as_float(value)
+    if number is None:
+        return "-"
+    return _fmt_pct(number, ratio_input=abs(number) <= 1.0)
+
+
 def _to_utc(value: Any) -> str:
     if value is None:
         return "-"
@@ -167,6 +174,13 @@ def _to_utc(value: Any) -> str:
         return str(value)
 
     return dt.strftime("%Y-%m-%d %H:%M")
+
+
+def _to_utc_seconds(value: Any) -> str:
+    number = _as_float(value)
+    if number is None:
+        return _to_utc(value)
+    return _to_utc(int(number))
 
 
 def _records(data: Any) -> list[dict[str, Any]]:
@@ -217,13 +231,17 @@ def _detect_symbol(data: Any) -> str:
 def _find_time_value(item: dict[str, Any]) -> Any:
     return _pick(
         item,
+        "create_time",
+        "current_time",
+        "start_time",
+        "order_end_time",
+        "next_funding_time",
         "t",
         "ts",
         "time",
         "timestamp",
         "date",
         "datetime",
-        "next_funding_time",
         "nextFundingTime",
         "update_time",
         "updated_at",
@@ -703,11 +721,47 @@ def format_coinglass_market_data(action: str, data: Any) -> str:
             ["time", "buy_vol", "sell_vol", "ratio"],
             lambda r: [
                 _to_utc(_find_time_value(r)),
-                _fmt_num(_pick(r, "buy_volume_usd", "taker_buy_volume_usd", "buy_volume", "buyVol", "buy")),
-                _fmt_num(_pick(r, "sell_volume_usd", "taker_sell_volume_usd", "sell_volume", "sellVol", "sell")),
+                _fmt_num(
+                    _pick(
+                        r,
+                        "buy_vol_usd",
+                        "buy_volume_usd",
+                        "taker_buy_volume_usd",
+                        "buy_volume",
+                        "buyVol",
+                        "buy",
+                    )
+                ),
+                _fmt_num(
+                    _pick(
+                        r,
+                        "sell_vol_usd",
+                        "sell_volume_usd",
+                        "taker_sell_volume_usd",
+                        "sell_volume",
+                        "sellVol",
+                        "sell",
+                    )
+                ),
                 _safe_ratio(
-                    _pick(r, "buy_volume_usd", "taker_buy_volume_usd", "buy_volume", "buyVol", "buy"),
-                    _pick(r, "sell_volume_usd", "taker_sell_volume_usd", "sell_volume", "sellVol", "sell"),
+                    _pick(
+                        r,
+                        "buy_vol_usd",
+                        "buy_volume_usd",
+                        "taker_buy_volume_usd",
+                        "buy_volume",
+                        "buyVol",
+                        "buy",
+                    ),
+                    _pick(
+                        r,
+                        "sell_vol_usd",
+                        "sell_volume_usd",
+                        "taker_sell_volume_usd",
+                        "sell_volume",
+                        "sellVol",
+                        "sell",
+                    ),
                 ),
             ],
         )
@@ -742,7 +796,7 @@ def format_coinglass_oi_history(action: str, data: Any) -> str:
         raise ValueError(f"No formatter action for {tool}:{action}")
 
     def _build_row(r: dict[str, Any]) -> list[str]:
-        close_val = _pick(r, "close", "c", "oi", "open_interest", "openInterest")
+        close_val = _pick(r, "close", "c", "open_interest", "oi", "openInterest")
         open_val = _pick(r, "open", "o")
         change_pct = _pick(
             r,
@@ -1015,42 +1069,42 @@ def format_coinglass_long_short(action: str, data: Any) -> str:
             [
                 [
                     _to_utc(_find_time_value(r)),
-                    _fmt_pct(
+                    _fmt_pct_auto(
                         _pick(
                             r,
-                            "long_rate",
-                            "longRatio",
-                            "long_ratio",
                             "global_account_long_percent",
                             "top_account_long_percent",
                             "top_position_long_percent",
+                            "longRate",
+                            "long_rate",
+                            "longRatio",
+                            "long_ratio",
                             "buy_ratio",
                             "long",
                         ),
-                        ratio_input=True,
                     ),
-                    _fmt_pct(
+                    _fmt_pct_auto(
                         _pick(
                             r,
-                            "short_rate",
-                            "shortRatio",
-                            "short_ratio",
                             "global_account_short_percent",
                             "top_account_short_percent",
                             "top_position_short_percent",
+                            "shortRate",
+                            "short_rate",
+                            "shortRatio",
+                            "short_ratio",
                             "sell_ratio",
                             "short",
                         ),
-                        ratio_input=True,
                     ),
                     _fmt_num(
                         _pick(
                             r,
-                            "long_short_ratio",
-                            "longShortRatio",
                             "global_account_long_short_ratio",
                             "top_account_long_short_ratio",
                             "top_position_long_short_ratio",
+                            "longShortRatio",
+                            "long_short_ratio",
                             "ratio",
                         ),
                         use_suffix=False,
@@ -1084,10 +1138,12 @@ def format_coinglass_liq_history(action: str, data: Any) -> str:
         rows = _rows_from_parallel_lists(
             data,
             time_keys=("dateList", "time_list", "time"),
-            value_keys=("longList", "shortList"),
+            value_keys=("long_volUsd", "short_volUsd", "longList", "shortList"),
         )
         if rows:
             for row in rows:
+                row["long_volUsd"] = _pick(row, "long_volUsd", "longList")
+                row["short_volUsd"] = _pick(row, "short_volUsd", "shortList")
                 row["long_liquidation_usd"] = row.get("longList")
                 row["short_liquidation_usd"] = row.get("shortList")
             data = rows
@@ -1099,11 +1155,61 @@ def format_coinglass_liq_history(action: str, data: Any) -> str:
             ["time", "long_liq", "short_liq", "total"],
             lambda r: [
                 _to_utc(_find_time_value(r)),
-                _fmt_num(_pick(r, "long_liquidation_usd", "long_liq", "longLiq", "long", "longUsd")),
-                _fmt_num(_pick(r, "short_liquidation_usd", "short_liq", "shortLiq", "short", "shortUsd")),
                 _fmt_num(
-                    (_as_float(_pick(r, "long_liquidation_usd", "long_liq", "longLiq", "long", "longUsd")) or 0.0)
-                    + (_as_float(_pick(r, "short_liquidation_usd", "short_liq", "shortLiq", "short", "shortUsd")) or 0.0)
+                    _pick(
+                        r,
+                        "long_volUsd",
+                        "long_liquidation_usd",
+                        "longLiquidation_usd",
+                        "long_liq",
+                        "longLiq",
+                        "long",
+                        "longUsd",
+                    )
+                ),
+                _fmt_num(
+                    _pick(
+                        r,
+                        "short_volUsd",
+                        "short_liquidation_usd",
+                        "shortLiquidation_usd",
+                        "short_liq",
+                        "shortLiq",
+                        "short",
+                        "shortUsd",
+                    )
+                ),
+                _fmt_num(
+                    (
+                        _as_float(
+                            _pick(
+                                r,
+                                "long_volUsd",
+                                "long_liquidation_usd",
+                                "longLiquidation_usd",
+                                "long_liq",
+                                "longLiq",
+                                "long",
+                                "longUsd",
+                            )
+                        )
+                        or 0.0
+                    )
+                    + (
+                        _as_float(
+                            _pick(
+                                r,
+                                "short_volUsd",
+                                "short_liquidation_usd",
+                                "shortLiquidation_usd",
+                                "short_liq",
+                                "shortLiq",
+                                "short",
+                                "shortUsd",
+                            )
+                        )
+                        or 0.0
+                    )
                 ),
             ],
         )
@@ -1144,14 +1250,36 @@ def format_coinglass_liq_history(action: str, data: Any) -> str:
                 _fmt_num(_pick(r, "liquidation_usd", "liq_usd", "total", "amount", "liquidation")),
                 _fmt_pct(
                     (
-                        (_as_float(_pick(r, "long_liquidation_usd", "long_liq", "longLiq")) or 0.0)
+                        (
+                            _as_float(
+                                _pick(
+                                    r,
+                                    "longLiquidation_usd",
+                                    "long_liquidation_usd",
+                                    "long_liq",
+                                    "longLiq",
+                                )
+                            )
+                            or 0.0
+                        )
                         / max((_as_float(_pick(r, "liquidation_usd", "liq_usd", "total")) or 0.0), 1e-12)
                     )
                     * 100
                 ),
                 _fmt_pct(
                     (
-                        (_as_float(_pick(r, "short_liquidation_usd", "short_liq", "shortLiq")) or 0.0)
+                        (
+                            _as_float(
+                                _pick(
+                                    r,
+                                    "shortLiquidation_usd",
+                                    "short_liquidation_usd",
+                                    "short_liq",
+                                    "shortLiq",
+                                )
+                            )
+                            or 0.0
+                        )
                         / max((_as_float(_pick(r, "liquidation_usd", "liq_usd", "total")) or 0.0), 1e-12)
                     )
                     * 100
@@ -1379,6 +1507,8 @@ def format_coinglass_ob_large_orders(action: str, data: Any) -> str:
                 "current_usd_value",
                 "start_usd_value",
                 "executed_usd_value",
+                "start_quantity",
+                "current_quantity",
                 "volume",
                 "amount",
                 "size",
@@ -1386,7 +1516,7 @@ def format_coinglass_ob_large_orders(action: str, data: Any) -> str:
                 "value",
             )
         ) or 0.0
-        side_raw = str(_pick(r, "side", "order_side", "direction") or "").lower()
+        side_raw = str(_pick(r, "order_side", "side", "direction") or "").lower()
         if side_raw in {"2", "bid", "buy", "long"}:
             total_bid += volume
             side = "bid"
@@ -1400,7 +1530,7 @@ def format_coinglass_ob_large_orders(action: str, data: Any) -> str:
             "price": _pick(r, "limit_price", "price", "order_price", "trigger_price"),
             "volume": volume,
             "side": side,
-            "time": _pick(r, "current_time", "start_time", "order_end_time", "time", "timestamp"),
+            "time": _pick(r, "start_time", "current_time", "order_end_time", "time", "timestamp"),
         })
 
     top5 = sorted(normalized, key=lambda x: x["volume"], reverse=True)[:5]
@@ -1480,12 +1610,12 @@ def format_coinglass_bitfinex_longs_shorts(action: str, data: Any) -> str:
         ["time", "long_vol", "short_vol", "ratio"],
         [
             [
-                _to_utc(_find_time_value(r)),
-                _fmt_num(_pick(r, "long_quantity", "long", "long_vol", "longVolume", "longs")),
-                _fmt_num(_pick(r, "short_quantity", "short", "short_vol", "shortVolume", "shorts")),
+                _to_utc_seconds(_pick(r, "time", "timestamp", "t")),
+                _fmt_num(_pick(r, "long_quantity", "longVolume", "long", "long_vol", "longs")),
+                _fmt_num(_pick(r, "short_quantity", "shortVolume", "short", "short_vol", "shorts")),
                 _safe_ratio(
-                    _pick(r, "long_quantity", "long", "long_vol", "longVolume", "longs"),
-                    _pick(r, "short_quantity", "short", "short_vol", "shortVolume", "shorts"),
+                    _pick(r, "long_quantity", "longVolume", "long", "long_vol", "longs"),
+                    _pick(r, "short_quantity", "shortVolume", "short", "short_vol", "shorts"),
                 ),
             ]
             for r in selected
@@ -1508,9 +1638,9 @@ def format_coinglass_taker(action: str, data: Any) -> str:
                 _fmt_num(
                     _pick(
                         r,
+                        "buy_vol_usd",
                         "taker_buy_volume_usd",
                         "aggregated_buy_volume_usd",
-                        "buy_vol_usd",
                         "buy_volume",
                         "buyVol",
                         "buy",
@@ -1520,9 +1650,9 @@ def format_coinglass_taker(action: str, data: Any) -> str:
                 _fmt_num(
                     _pick(
                         r,
+                        "sell_vol_usd",
                         "taker_sell_volume_usd",
                         "aggregated_sell_volume_usd",
-                        "sell_vol_usd",
                         "sell_volume",
                         "sellVol",
                         "sell",
@@ -1533,9 +1663,9 @@ def format_coinglass_taker(action: str, data: Any) -> str:
                     (
                         (_as_float(_pick(
                             r,
+                            "buy_vol_usd",
                             "taker_buy_volume_usd",
                             "aggregated_buy_volume_usd",
-                            "buy_vol_usd",
                             "buy_volume",
                             "buyVol",
                             "buy",
@@ -1545,9 +1675,9 @@ def format_coinglass_taker(action: str, data: Any) -> str:
                             (
                                 (_as_float(_pick(
                                     r,
+                                    "buy_vol_usd",
                                     "taker_buy_volume_usd",
                                     "aggregated_buy_volume_usd",
-                                    "buy_vol_usd",
                                     "buy_volume",
                                     "buyVol",
                                     "buy",
@@ -1555,9 +1685,9 @@ def format_coinglass_taker(action: str, data: Any) -> str:
                                 )) or 0.0)
                                 + (_as_float(_pick(
                                     r,
+                                    "sell_vol_usd",
                                     "taker_sell_volume_usd",
                                     "aggregated_sell_volume_usd",
-                                    "sell_vol_usd",
                                     "sell_volume",
                                     "sellVol",
                                     "sell",
@@ -1656,16 +1786,20 @@ def format_coinglass_options(action: str, data: Any) -> str:
         if not rows:
             return _truncate([_header(tool, action, data), "No data returned"], None, None)
 
-        selected = _top(rows, sort_keys=("oi", "open_interest", "volume"), limit=TOP_N)
+        selected = _top(
+            rows,
+            sort_keys=("open_interest", "open_interest_usd", "volume_usd_24h", "volume"),
+            limit=TOP_N,
+        )
         lines = [_header(tool, action, data)]
         lines += _render_table(
             ["exchange", "oi", "volume", "chg_24h"],
             [
                 [
-                    str(_pick(r, "exchange", "exName") or "-"),
-                    _fmt_num(_pick(r, "oi", "open_interest", "openInterest")),
-                    _fmt_num(_pick(r, "volume", "vol")),
-                    _fmt_pct(_pick(r, "change_24h", "change24h", "oi_change_24h")),
+                    str(_pick(r, "exchange_name", "exchange", "exName") or "-"),
+                    _fmt_num(_pick(r, "open_interest", "open_interest_usd", "oi", "openInterest")),
+                    _fmt_num(_pick(r, "volume_usd_24h", "volume", "vol")),
+                    _fmt_pct(_pick(r, "open_interest_change_24h", "change_24h", "change24h", "oi_change_24h")),
                 ]
                 for r in selected
             ],
@@ -1677,15 +1811,16 @@ def format_coinglass_options(action: str, data: Any) -> str:
             tool,
             action,
             data,
-            ["expiry", "max_pain", "call_oi", "put_oi", "pcr"],
+            ["date", "max_pain", "call_oi", "put_oi", "call_notional", "put_notional"],
             lambda r: [
-                str(_pick(r, "expiry", "date") or "-"),
+                str(_pick(r, "date", "expiry") or "-"),
                 _fmt_num(_pick(r, "max_pain_price", "maxPainPrice"), use_suffix=False),
-                _fmt_num(_pick(r, "call_oi", "callOi")),
-                _fmt_num(_pick(r, "put_oi", "putOi")),
-                _fmt_num(_pick(r, "pcr", "put_call_ratio", "putCallRatio"), use_suffix=False),
+                _fmt_num(_pick(r, "call_open_interest", "call_oi", "callOi")),
+                _fmt_num(_pick(r, "put_open_interest", "put_oi", "putOi")),
+                _fmt_num(_pick(r, "call_open_interest_notional", "call_notional")),
+                _fmt_num(_pick(r, "put_open_interest_notional", "put_notional")),
             ],
-            sort_keys=("expiry_time", "expiry", "date"),
+            sort_keys=("date", "expiry_time", "expiry"),
         )
 
     if action == "volume_history":
@@ -1710,9 +1845,9 @@ def format_coinglass_options(action: str, data: Any) -> str:
             ["time", "oi", "call_oi", "put_oi"],
             lambda r: [
                 _to_utc(_find_time_value(r)),
-                _fmt_num(_pick(r, "oi", "open_interest", "openInterest")),
-                _fmt_num(_pick(r, "call_oi", "callOi")),
-                _fmt_num(_pick(r, "put_oi", "putOi")),
+                _fmt_num(_pick(r, "open_interest", "oi", "openInterest")),
+                _fmt_num(_pick(r, "call_open_interest", "call_oi", "callOi")),
+                _fmt_num(_pick(r, "put_open_interest", "put_oi", "putOi")),
             ],
         )
 
@@ -1729,11 +1864,20 @@ def format_coinglass_onchain(action: str, data: Any) -> str:
             data,
             ["exchange", "balance", "chg_24h"],
             lambda r: [
-                str(_pick(r, "exchange", "exName", "key") or "-"),
-                _fmt_num(_pick(r, "balance", "value", "amount")),
-                _fmt_pct(_pick(r, "change_24h", "change24h", "balance_change_24h")),
+                str(_pick(r, "exchange_name", "exchange", "exName", "key") or "-"),
+                _fmt_num(_pick(r, "total_balance", "balance", "value", "amount")),
+                _fmt_pct(
+                    _pick(
+                        r,
+                        "balance_change_percent_1d",
+                        "balance_change_1d",
+                        "change_24h",
+                        "change24h",
+                        "balance_change_24h",
+                    )
+                ),
             ],
-            sort_keys=("balance", "value", "amount"),
+            sort_keys=("total_balance", "balance", "value", "amount"),
         )
 
     if action == "whale_transfer":
@@ -1758,18 +1902,61 @@ def format_coinglass_etf(action: str, data: Any) -> str:
     tool = "coinglass_etf"
 
     if action in {"flows", "bitcoin_flows", "ethereum_flows", "solana_flows"}:
-        return _format_last_points(
-            tool,
-            action,
-            data,
-            ["date", "flow_usd", "total_assets"],
-            lambda r: [
-                str(_pick(r, "date", "day") or _to_utc(_find_time_value(r))),
-                _fmt_num(_pick(r, "flow", "flow_usd", "net_flow", "netFlow")),
-                _fmt_num(_pick(r, "total_assets", "assets", "aum")),
-            ],
-            limit=5,
+        rows = _records(data)
+        if not rows and isinstance(data, dict):
+            rows = [data]
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        sorted_rows = sorted(
+            rows,
+            key=lambda r: _as_float(_pick(r, "timestamp", "time", "date")) or float("-inf"),
         )
+        selected = sorted_rows[-5:]
+
+        lines = [_header(tool, action, data)]
+        lines += _render_table(
+            ["date", "flow_usd", "price_usd"],
+            [
+                [
+                    _to_utc(_pick(r, "timestamp", "time", "date")),
+                    _fmt_num(_pick(r, "flow_usd", "flow", "net_flow", "netFlow")),
+                    _fmt_num(_pick(r, "price_usd", "price"), use_suffix=False),
+                ]
+                for r in selected
+            ],
+        )
+
+        ticker_rows: list[tuple[str, str, float]] = []
+        for day in selected:
+            day_label = _to_utc(_pick(day, "timestamp", "time", "date"))
+            nested = day.get("etf_flows")
+            if not isinstance(nested, list):
+                continue
+            for item in nested:
+                if not isinstance(item, dict):
+                    continue
+                flow_usd = _as_float(_pick(item, "flow_usd", "flow")) or 0.0
+                ticker_rows.append(
+                    (
+                        day_label,
+                        str(_pick(item, "etf_ticker", "ticker", "symbol") or "-"),
+                        flow_usd,
+                    )
+                )
+
+        if ticker_rows:
+            lines.append("per_etf:")
+            lines += _render_table(
+                ["date", "ticker", "flow_usd"],
+                [
+                    [date_label, ticker, _fmt_num(flow_usd)]
+                    for date_label, ticker, flow_usd in sorted(
+                        ticker_rows, key=lambda x: abs(x[2]), reverse=True
+                    )[:10]
+                ],
+            )
+        return _truncate(lines, total_items=len(rows), shown_items=len(selected))
 
     if action in {"list", "bitcoin_list", "ethereum_list"}:
         return _format_generic_top(
@@ -1779,9 +1966,9 @@ def format_coinglass_etf(action: str, data: Any) -> str:
             ["fund", "ticker", "assets", "flow_24h"],
             lambda r: [
                 str(_pick(r, "fund", "name", "issuer") or "-"),
-                str(_pick(r, "ticker", "symbol") or "-"),
+                str(_pick(r, "etf_ticker", "ticker", "symbol") or "-"),
                 _fmt_num(_pick(r, "assets", "aum", "total_assets")),
-                _fmt_num(_pick(r, "flow_24h", "flow", "net_flow", "netFlow")),
+                _fmt_num(_pick(r, "flow_usd", "flow_24h", "flow", "net_flow", "netFlow")),
             ],
             sort_keys=("assets", "aum", "total_assets"),
         )
@@ -1826,27 +2013,46 @@ def format_coinglass_indicators(action: str, data: Any) -> str:
     tool = "coinglass_indicators"
 
     if action == "fear_greed":
-        rows = _records(data)
+        rows: list[dict[str, Any]] = []
+        if isinstance(data, dict):
+            data_list = data.get("data_list")
+            price_list = data.get("price_list")
+            time_list = data.get("time_list")
+            if (
+                isinstance(data_list, list)
+                and isinstance(price_list, list)
+                and isinstance(time_list, list)
+            ):
+                for ts, value, price in zip(time_list, data_list, price_list):
+                    rows.append({"time": ts, "value": value, "price_usd": price})
+        if not rows:
+            rows = _records(data)
         if not rows:
             return _truncate([_header(tool, action, data), "No data returned"], None, None)
 
         current = rows[-1]
+        current_value = _pick(current, "value", "fear_greed", "index", "data")
+        current_class = _pick(current, "classification", "class") or _classify_fear_greed(current_value)
         lines = [
             _header(tool, action, data),
             (
                 "current="
-                f"value:{_fmt_num(_pick(current, 'value', 'fear_greed', 'index'), use_suffix=False)}, "
-                f"classification:{_pick(current, 'classification', 'class') or '-'}"
+                f"value:{_fmt_num(current_value, use_suffix=False)}, "
+                f"classification:{current_class}"
             ),
         ]
         tail = rows[-7:]
         lines += _render_table(
-            ["time", "value", "classification"],
+            ["time", "value", "price_usd", "classification"],
             [
                 [
                     str(_pick(r, "date") or _to_utc(_find_time_value(r))),
-                    _fmt_num(_pick(r, "value", "fear_greed", "index"), use_suffix=False),
-                    str(_pick(r, "classification", "class") or "-"),
+                    _fmt_num(_pick(r, "value", "fear_greed", "index", "data"), use_suffix=False),
+                    _fmt_num(_pick(r, "price_usd", "price", "btc_price"), use_suffix=False),
+                    str(
+                        _pick(r, "classification", "class")
+                        or _classify_fear_greed(_pick(r, "value", "fear_greed", "index", "data"))
+                    ),
                 ]
                 for r in tail
             ],
