@@ -357,7 +357,7 @@ ENDPOINT_ONCHAIN_BALANCE_LIST = "/api/exchange/balance/list"
 ENDPOINT_ONCHAIN_WHALE_TRANSFER = "/api/chain/v2/whale-transfer"
 ENDPOINT_HYPERLIQUID_WHALE_ALERTS = "/api/hyperliquid/whale-alert"
 ENDPOINT_FUTURES_AGGREGATED_TAKER_RATIO_HISTORY = (
-    "/api/futures/aggregatedTakerBuySellVolumeRatio/history"
+    "/api/futures/aggregated-taker-buy-sell-volume/history"
 )
 # These paths include trailing spaces in the published OpenAPI spec.
 ENDPOINT_CDRI_INDEX_HISTORY = "/api/futures/cdri-index/history "
@@ -1084,12 +1084,12 @@ async def coinglass_long_short(
 
     if action == "taker_ratio":
         params = {
-            "exchange": exchange,
-            "symbol": pair,
+            "exchange_list": exchange,
+            "symbol": pair or symbol,
             "interval": interval,
             "limit": limit,
-            "startTime": start_time,
-            "endTime": end_time,
+            "start_time": start_time,
+            "end_time": end_time,
         }
     elif action in {"net_position", "net_position_v2"}:
         params = {
@@ -1889,17 +1889,13 @@ async def coinglass_taker(
             raise ValueError(
                 "Action 'aggregated_ratio' is only available for futures market"
             )
-        if not exchange or not symbol:
-            raise ValueError(
-                "Action 'aggregated_ratio' requires exchange + symbol for futures market."
-            )
         params = {
-            "exchange": exchange,
+            "exchange_list": exchange or "Binance",
             "symbol": symbol,
             "interval": interval,
             "limit": limit,
-            "startTime": start_time,
-            "endTime": end_time,
+            "start_time": start_time,
+            "end_time": end_time,
         }
     else:
         raise ValueError(f"Unsupported action '{action}' for market '{market}'")
