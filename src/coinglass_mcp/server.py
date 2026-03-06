@@ -506,7 +506,12 @@ async def coinglass_oi_history(
     ] = None,
     exchange: Annotated[
         str | None,
-        Field(description="Exchange for 'pair' action (e.g., 'Binance')"),
+        Field(
+            description=(
+                "Exchange for 'pair' action (e.g., 'Binance') or comma-separated "
+                "exchange list for 'coin_margin' (e.g., 'Binance,OKX')"
+            )
+        ),
     ] = None,
     pair: Annotated[
         str | None,
@@ -535,6 +540,11 @@ async def coinglass_oi_history(
     """
     check_interval(ctx, interval)
     check_params(action, symbol=symbol, exchange=exchange, pair=pair)
+    if action == "coin_margin" and not exchange:
+        raise ValueError(
+            "Action 'coin_margin' requires exchange list via exchange "
+            "(e.g., exchange='Binance,OKX')"
+        )
     client = get_client(ctx)
 
     endpoints = {
@@ -548,6 +558,13 @@ async def coinglass_oi_history(
         params = {
             "exchange": exchange,
             "symbol": pair,
+            "interval": interval,
+            "limit": limit,
+        }
+    elif action == "coin_margin":
+        params = {
+            "symbol": symbol,
+            "exchange_list": exchange,
             "interval": interval,
             "limit": limit,
         }
@@ -603,6 +620,8 @@ async def coinglass_oi_distribution(
         - Historical distribution: action="exchange_chart", symbol="BTC", range="24h"
     """
     check_params(action, symbol=symbol, range=range)
+    if action == "exchange_chart" and not range:
+        raise ValueError("Action 'exchange_chart' requires range (e.g., '7d').")
     client = get_client(ctx)
 
     if action == "by_exchange":
@@ -1082,6 +1101,8 @@ async def coinglass_liq_heatmap(
         )
     if "coin" in action and not symbol:
         raise ValueError("Coin heatmap/map actions require symbol (e.g., symbol='BTC')")
+    if action == "pair_map" and not range:
+        raise ValueError("Action 'pair_map' requires range (e.g., '7d').")
     client = get_client(ctx)
 
     pair_heatmap_endpoints = {
@@ -1296,10 +1317,26 @@ async def coinglass_ob_large_orders(
         endpoint = "/api/futures/orderbook/large-limit-order"
         params = {"exchange": exchange, "symbol": symbol or pair, "limit": limit}
     elif action == "history":
+        history_symbol = symbol or pair
+        missing: list[str] = []
+        if not exchange:
+            missing.append("exchange")
+        if not history_symbol:
+            missing.append("symbol")
+        if start_time is None:
+            missing.append("start_time")
+        if end_time is None:
+            missing.append("end_time")
+        if state is None:
+            missing.append("state")
+        if missing:
+            raise ValueError(
+                "Action 'history' requires parameters: " + ", ".join(missing)
+            )
         endpoint = "/api/futures/orderbook/large-limit-order-history"
         params = {
             "exchange": exchange,
-            "symbol": pair,
+            "symbol": history_symbol,
             "state": state,
             "start_time": start_time,
             "end_time": end_time,
@@ -1848,6 +1885,10 @@ async def coinglass_options(
     range: Annotated[
         str | None, Field(description="Time range: 7d, 30d, 90d")
     ] = None,
+    unit: Annotated[
+        Optional[str],
+        Field(description="Unit for oi_history action (required by API)"),
+    ] = None,
     ctx: Context = None,
 ) -> dict:
     """Get options market data from Deribit, OKX, Binance, Bybit.
@@ -1869,13 +1910,20 @@ async def coinglass_options(
         "volume_history": "/api/option/exchange-vol-history",
     }
 
-    params = {"symbol": symbol, "exchange": exchange if action == "max_pain" else None}
+    if action == "oi_history" and not unit:
+        raise ValueError("Action 'oi_history' requires unit.")
+
+    params = {"symbol": symbol}
+    if action == "max_pain":
+        params["exchange"] = exchange
+    if action == "oi_history":
+        params["unit"] = unit
     if range:
         params["range"] = range
 
     data = await client.request(endpoints[action], params)
 
-    return ok(action, data, symbol=symbol, exchange=exchange, range=range)
+    return ok(action, data, symbol=symbol, exchange=exchange, range=range, unit=unit)
 
 
 # ============================================================================
