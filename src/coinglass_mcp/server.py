@@ -561,7 +561,7 @@ async def coinglass_oi_history(
             "interval": interval,
             "limit": limit,
         }
-    elif action == "coin_margin":
+    elif action in ("coin_margin", "stablecoin"):
         params = {
             "symbol": symbol,
             "exchange_list": exchange,
@@ -1569,7 +1569,7 @@ async def coinglass_taker(
             "pair_history": "/api/futures/v2/taker-buy-sell-volume/history",
             "coin_history": "/api/futures/aggregated-taker-buy-sell-volume/history",
             "by_exchange": "/api/futures/taker-buy-sell-volume/exchange-list",
-            "aggregated_ratio": "/api/futures/aggregatedTakerBuySellVolumeRatio/history",
+            "aggregated_ratio": "/api/futures/aggregated-taker-buy-sell-volume/history",
         }
     else:
         endpoints = {
@@ -1606,12 +1606,12 @@ async def coinglass_taker(
                 "Action 'aggregated_ratio' is only available for futures market"
             )
         params = {
-            "exchange": exchange,
-            "symbol": pair,
+            "exchange_list": exchange or "Binance",
+            "symbol": symbol,
             "interval": interval,
             "limit": limit,
-            "startTime": start_time,
-            "endTime": end_time,
+            "start_time": start_time,
+            "end_time": end_time,
         }
     else:
         raise ValueError(f"Unsupported action '{action}' for market '{market}'")
