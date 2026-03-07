@@ -792,8 +792,10 @@ def format_coinglass_oi_history(action: str, data: Any) -> str:
         raise ValueError(f"No formatter action for {tool}:{action}")
 
     def _build_row(r: dict[str, Any]) -> list[str]:
-        close_val = _pick(r, "close", "c", "open_interest", "oi", "openInterest")
         open_val = _pick(r, "open", "o")
+        high_val = _pick(r, "high", "h")
+        low_val = _pick(r, "low", "l")
+        close_val = _pick(r, "close", "c", "open_interest", "oi", "openInterest")
         change_pct = _pick(
             r,
             "open_interest_change_percent",
@@ -807,13 +809,31 @@ def format_coinglass_oi_history(action: str, data: Any) -> str:
             open_f = _as_float(open_val)
             if close_f is not None and open_f not in (None, 0.0):
                 change_pct = (close_f - open_f) / open_f * 100
+        # Show OHLC if available, otherwise just close
+        if high_val is not None and low_val is not None:
+            return [
+                _to_utc(_find_time_value(r)),
+                _fmt_num(open_val),
+                _fmt_num(high_val),
+                _fmt_num(low_val),
+                _fmt_num(close_val),
+                _fmt_pct(change_pct),
+            ]
         return [
             _to_utc(_find_time_value(r)),
             _fmt_num(close_val),
             _fmt_pct(change_pct),
         ]
 
-    return _format_last_points(tool, action, data, ["time", "oi", "oi_change"], _build_row)
+    # Peek at first record to determine columns
+    rows = _records(data)
+    has_ohlc = False
+    if rows:
+        first = rows[0]
+        has_ohlc = _pick(first, "high", "h") is not None
+
+    cols = ["time", "open", "high", "low", "close", "change"] if has_ohlc else ["time", "oi", "oi_change"]
+    return _format_last_points(tool, action, data, cols, _build_row)
 
 
 def format_coinglass_oi_distribution(action: str, data: Any) -> str:
@@ -1057,16 +1077,31 @@ def format_coinglass_funding_history(action: str, data: Any) -> str:
     if action not in {"pair", "oi_weighted", "vol_weighted"}:
         raise ValueError(f"No formatter action for {tool}:{action}")
 
-    return _format_last_points(
-        tool,
-        action,
-        data,
-        ["time", "rate"],
-        lambda r: [
+    def _build_row(r: dict[str, Any]) -> list[str]:
+        open_val = _pick(r, "open", "o")
+        high_val = _pick(r, "high", "h")
+        low_val = _pick(r, "low", "l")
+        close_val = _pick(r, "close", "c", "funding_rate", "rate", "fundingRate")
+        if high_val is not None and low_val is not None:
+            return [
+                _to_utc(_find_time_value(r)),
+                _fmt_pct(open_val, ratio_input=True),
+                _fmt_pct(high_val, ratio_input=True),
+                _fmt_pct(low_val, ratio_input=True),
+                _fmt_pct(close_val, ratio_input=True),
+            ]
+        return [
             _to_utc(_find_time_value(r)),
-            _fmt_pct(_pick(r, "close", "c", "funding_rate", "rate", "fundingRate"), ratio_input=True),
-        ],
-    )
+            _fmt_pct(close_val, ratio_input=True),
+        ]
+
+    rows = _records(data)
+    has_ohlc = False
+    if rows:
+        has_ohlc = _pick(rows[0], "high", "h") is not None
+
+    cols = ["time", "open", "high", "low", "close"] if has_ohlc else ["time", "rate"]
+    return _format_last_points(tool, action, data, cols, _build_row)
 
 
 def format_coinglass_long_short(action: str, data: Any) -> str:
@@ -1425,12 +1460,21 @@ def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
                 )[:half]
                 top_levels = sorted(above + below, key=lambda x: x[0], reverse=True)
 
+                # Add direction labels: above median = SHORT_PAIN (squeeze), below = LONG_PAIN (dump)
+                above_total = sum(v for p, v in above)
+                below_total = sum(v for p, v in below)
                 lines = [_header(tool, action, data)]
+                lines.append(
+                    f"summary=short_pain_above:{_fmt_num(above_total)}, "
+                    f"long_pain_below:{_fmt_num(below_total)}, "
+                    f"median_price:{_fmt_num(median_price, use_suffix=False)}"
+                )
                 lines += _render_table(
-                    ["price", "total", "low≤10x", "med11-25x", "high26-50x", "degen>50x"],
+                    ["price", "zone", "total", "low≤10x", "med11-25x", "high26-50x", "degen>50x"],
                     [
                         [
                             _fmt_num(price, use_suffix=False),
+                            "SHORT_PAIN" if price >= median_price else "LONG_PAIN",
                             _fmt_num(vol),
                             _fmt_num(by_price_lev[price].get("low", 0)),
                             _fmt_num(by_price_lev[price].get("med", 0)),

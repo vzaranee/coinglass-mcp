@@ -1692,6 +1692,11 @@ async def coinglass_whale_positions(
         params = {"symbol": symbol, "current_page": str(page)}
     data = await client.request(endpoints[action], params)
 
+    # Client-side symbol filter for positions (API returns all coins)
+    if symbol and action == "positions" and isinstance(data, list):
+        sym_upper = symbol.upper()
+        data = [r for r in data if str(r.get("symbol", "")).upper() == sym_upper]
+
     return ok(action, data, symbol=symbol, page=page)
 
 
