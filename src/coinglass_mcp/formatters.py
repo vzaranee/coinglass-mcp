@@ -694,17 +694,42 @@ def format_coinglass_market_data(action: str, data: Any) -> str:
             _header(tool, action, data),
             f"price={_fmt_num(_pick(row, 'current_price', 'price', 'close', 'c'), use_suffix=False)}",
             (
-                "changes="
-                f"1h:{_fmt_pct(_pick(row, 'price_change_percent_1h', 'change_1h', 'priceChangePercent1h'))}, "
-                f"4h:{_fmt_pct(_pick(row, 'price_change_percent_4h', 'change_4h', 'priceChangePercent4h'))}, "
-                f"24h:{_fmt_pct(_pick(row, 'price_change_percent_24h', 'change_24h', 'priceChangePercent24h'))}"
+                "price_changes="
+                f"5m:{_fmt_pct(_pick(row, 'price_change_percent_5m'))}, "
+                f"1h:{_fmt_pct(_pick(row, 'price_change_percent_1h', 'change_1h'))}, "
+                f"4h:{_fmt_pct(_pick(row, 'price_change_percent_4h', 'change_4h'))}, "
+                f"24h:{_fmt_pct(_pick(row, 'price_change_percent_24h', 'change_24h'))}"
             ),
             (
-                "metrics="
-                f"oi:{_fmt_num(_pick(row, 'open_interest_usd', 'oi', 'open_interest', 'openInterest'))}, "
-                f"volume_24h:{_fmt_num(_pick(row, 'volume_usd_24h', 'volume_change_usd_24h', 'volume', 'volume_24h', 'volume24h'))}, "
-                f"mcap:{_fmt_num(_pick(row, 'market_cap_usd', 'market_cap', 'marketCap', 'mcap'))}, "
-                f"funding:{_fmt_pct(_pick(row, 'avg_funding_rate_by_oi', 'funding_rate', 'fundingRate'), ratio_input=True)}"
+                "oi="
+                f"{_fmt_num(_pick(row, 'open_interest_usd', 'oi'))}, "
+                f"chg_1h:{_fmt_pct(_pick(row, 'open_interest_change_percent_1h'))}, "
+                f"chg_4h:{_fmt_pct(_pick(row, 'open_interest_change_percent_4h'))}, "
+                f"chg_24h:{_fmt_pct(_pick(row, 'open_interest_change_percent_24h'))}"
+            ),
+            (
+                "volume="
+                f"chg_1h:{_fmt_pct(_pick(row, 'volume_change_percent_1h'))}, "
+                f"chg_4h:{_fmt_pct(_pick(row, 'volume_change_percent_4h'))}, "
+                f"chg_24h:{_fmt_pct(_pick(row, 'volume_change_percent_24h'))}"
+            ),
+            (
+                "liq_24h="
+                f"long:{_fmt_num(_pick(row, 'long_liquidation_usd_24h'))}, "
+                f"short:{_fmt_num(_pick(row, 'short_liquidation_usd_24h'))}, "
+                f"total:{_fmt_num(_pick(row, 'liquidation_usd_24h'))}"
+            ),
+            (
+                "ls_ratio="
+                f"1h:{_fmt_num(_pick(row, 'long_short_ratio_1h'), use_suffix=False)}, "
+                f"4h:{_fmt_num(_pick(row, 'long_short_ratio_4h'), use_suffix=False)}, "
+                f"24h:{_fmt_num(_pick(row, 'long_short_ratio_24h'), use_suffix=False)}"
+            ),
+            (
+                "meta="
+                f"mcap:{_fmt_num(_pick(row, 'market_cap_usd', 'mcap'))}, "
+                f"funding:{_fmt_pct(_pick(row, 'avg_funding_rate_by_oi', 'funding_rate'), ratio_input=True)}, "
+                f"oi_mcap:{_fmt_pct(_pick(row, 'open_interest_market_cap_ratio'), ratio_input=True)}"
             ),
         ]
         return _truncate(lines, None, None)
