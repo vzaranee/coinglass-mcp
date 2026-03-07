@@ -19,7 +19,6 @@ TIME_SERIES_N = 24
 
 PASS_THROUGH_TOOLS = {
     "coinglass_config",
-    "coinglass_calendar",
     "coinglass_market_info",
 }
 
@@ -645,7 +644,38 @@ def _format_default(tool: str, action: str, data: Any, limit: int = TIME_SERIES_
 
 
 def format_coinglass_calendar(action: str, data: Any) -> str:
-    return _format_passthrough("coinglass_calendar", action, data)
+    tool = "coinglass_calendar"
+    rows = _records(data)
+    if not rows:
+        return _format_passthrough(tool, action, data)
+
+    # Filter by importance_level >= 2 (medium + high impact)
+    important = [r for r in rows if (_as_float(_pick(r, "importance_level", "importance", "star")) or 0) >= 2]
+    if not important:
+        important = rows  # fallback: show all if no importance field
+
+    # Sort by time descending (newest first), limit
+    important.sort(key=lambda r: _as_float(_pick(r, "publish_timestamp", "time", "timestamp") or _find_time_value(r)) or 0, reverse=True)
+    selected = important[:TOP_N]
+
+    stars_map = {1: "★", 2: "★★", 3: "★★★"}
+    lines = [_header(tool, action, data)]
+    lines += _render_table(
+        ["time", "impact", "country", "event", "actual", "forecast", "previous"],
+        [
+            [
+                _to_utc(_pick(r, "publish_timestamp", "time", "timestamp") or _find_time_value(r)),
+                stars_map.get(int(_as_float(_pick(r, "importance_level", "importance")) or 0), "?"),
+                str(_pick(r, "country_code", "country_name", "country") or "-"),
+                str(_pick(r, "calendar_name", "event_name", "title", "name") or "-")[:40],
+                str(_pick(r, "published_value", "actual_value", "actual") or "-"),
+                str(_pick(r, "forecast_value", "forecast") or "-"),
+                str(_pick(r, "previous_value", "previous") or "-"),
+            ]
+            for r in selected
+        ],
+    )
+    return _truncate(lines, total_items=len(important), shown_items=len(selected))
 
 
 def format_coinglass_market_info(action: str, data: Any) -> str:
@@ -967,7 +997,16 @@ def format_coinglass_funding_current(action: str, data: Any) -> str:
         if not rows:
             return _truncate([_header(tool, action, data), "No data returned"], None, None)
 
+        # Ensure major exchanges are always visible (they often have moderate rates)
+        MAJOR_EXCHANGES = {"binance", "bybit", "okx", "bitget", "deribit"}
         selected = _top(rows, sort_keys=("funding_rate", "rate", "fundingRate"), limit=TOP_N)
+        selected_names = {str(_pick(r, "exchange", "exchange_name", "exName") or "").lower() for r in selected}
+        # Add missing major exchanges from the full list
+        for row in rows:
+            ex_name = str(_pick(row, "exchange", "exchange_name", "exName") or "").lower()
+            if ex_name in MAJOR_EXCHANGES and ex_name not in selected_names:
+                selected.append(row)
+                selected_names.add(ex_name)
         rates = [_as_float(_pick(r, "funding_rate", "rate", "fundingRate")) for r in rows]
         clean_rates = [x for x in rates if x is not None]
 
