@@ -979,7 +979,8 @@ def format_coinglass_funding_current(action: str, data: Any) -> str:
         for row in rows:
             symbol = _pick(row, "symbol")
             nested_found = False
-            for list_key in ("stablecoin_margin_list", "token_margin_list"):
+            margin_labels = {"stablecoin_margin_list": "USDT", "token_margin_list": "COIN"}
+            for list_key, margin_type in margin_labels.items():
                 series = row.get(list_key)
                 if not isinstance(series, list):
                     continue
@@ -990,6 +991,7 @@ def format_coinglass_funding_current(action: str, data: Any) -> str:
                     merged = dict(item)
                     if symbol is not None:
                         merged.setdefault("symbol", symbol)
+                    merged["_margin_type"] = margin_type
                     flattened.append(merged)
             if not nested_found:
                 flattened.append(row)
@@ -1021,10 +1023,11 @@ def format_coinglass_funding_current(action: str, data: Any) -> str:
             )
 
         lines += _render_table(
-            ["exchange", "funding_rate", "next_funding"],
+            ["exchange", "margin", "funding_rate", "next_funding"],
             [
                 [
                     str(_pick(r, "exchange", "exchange_name", "exName") or "-"),
+                    str(r.get("_margin_type", "-")),
                     _fmt_pct(_pick(r, "funding_rate", "rate", "fundingRate"), ratio_input=True),
                     _to_utc(_pick(r, "next_funding_time", "nextFundingTime", "time")),
                 ]
