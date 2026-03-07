@@ -1535,12 +1535,20 @@ def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
                 # Add direction labels: above median = SHORT_PAIN (squeeze), below = LONG_PAIN (dump)
                 above_total = sum(v for p, v in above)
                 below_total = sum(v for p, v in below)
+                # Nearest magnets (highest volume level per side)
+                nearest_short = max(above, key=lambda x: x[1]) if above else None
+                nearest_long = max(below, key=lambda x: x[1]) if below else None
                 lines = [_header(tool, action, data)]
-                lines.append(
-                    f"summary=short_pain_above:{_fmt_num(above_total)}, "
-                    f"long_pain_below:{_fmt_num(below_total)}, "
-                    f"median_price:{_fmt_num(median_price, use_suffix=False)}"
-                )
+                summary_parts = [
+                    f"short_pain_above:{_fmt_num(above_total)}",
+                    f"long_pain_below:{_fmt_num(below_total)}",
+                    f"median_price:{_fmt_num(median_price, use_suffix=False)}",
+                ]
+                if nearest_short:
+                    summary_parts.append(f"nearest_short_magnet:{_fmt_num(nearest_short[0], use_suffix=False)}({_fmt_num(nearest_short[1])})")
+                if nearest_long:
+                    summary_parts.append(f"nearest_long_magnet:{_fmt_num(nearest_long[0], use_suffix=False)}({_fmt_num(nearest_long[1])})")
+                lines.append("summary=" + ", ".join(summary_parts))
                 lines += _render_table(
                     ["price", "zone", "total", "low≤10x", "med11-25x", "high26-50x", "degen>50x"],
                     [
@@ -1743,9 +1751,27 @@ def format_coinglass_ob_large_orders(action: str, data: Any) -> str:
 
     top5 = sorted(normalized, key=lambda x: x["volume"], reverse=True)[:TOP_N]
 
+    # Wall summary: nearest/largest bid and ask walls
+    bids = [n for n in normalized if n["side"] == "bid" and n["volume"] > 0]
+    asks = [n for n in normalized if n["side"] == "ask" and n["volume"] > 0]
+    largest_bid = max(bids, key=lambda x: x["volume"]) if bids else None
+    largest_ask = max(asks, key=lambda x: x["volume"]) if asks else None
+    imbalance = total_bid / total_ask if total_ask > 0 else 0
+
+    summary_parts = [
+        f"count:{len(rows)}",
+        f"total_bid:{_fmt_num(total_bid)}",
+        f"total_ask:{_fmt_num(total_ask)}",
+        f"imbalance:{imbalance:.2f}x {'bid' if imbalance >= 1 else 'ask'}-heavy",
+    ]
+    if largest_bid:
+        summary_parts.append(f"largest_bid_wall:{_fmt_num(largest_bid['price'], use_suffix=False)}({_fmt_num(largest_bid['volume'])})")
+    if largest_ask:
+        summary_parts.append(f"largest_ask_wall:{_fmt_num(largest_ask['price'], use_suffix=False)}({_fmt_num(largest_ask['volume'])})")
+
     lines = [
         _header(tool, action, data),
-        f"summary=count:{len(rows)}, total_bid_volume:{_fmt_num(total_bid)}, total_ask_volume:{_fmt_num(total_ask)}",
+        f"summary={', '.join(summary_parts)}",
     ]
     lines += _render_table(
         ["time", "price", "volume", "side"],
@@ -1835,11 +1861,34 @@ def format_coinglass_bitfinex_longs_shorts(action: str, data: Any) -> str:
     return _truncate(lines, total_items=len(rows), shown_items=len(selected))
 
 
+def _cvd_summary(data: Any) -> str:
+    """Calculate CVD (Cumulative Volume Delta) from taker buy/sell data."""
+    rows = _records(data)
+    if not rows:
+        return ""
+    cvd = 0.0
+    positive_bars = 0
+    negative_bars = 0
+    for r in rows:
+        buy = _as_float(_pick(r, "buy_vol_usd", "taker_buy_volume_usd", "aggregated_buy_volume_usd", "buy_volume", "buy")) or 0.0
+        sell = _as_float(_pick(r, "sell_vol_usd", "taker_sell_volume_usd", "aggregated_sell_volume_usd", "sell_volume", "sell")) or 0.0
+        delta = buy - sell
+        cvd += delta
+        if delta > 0:
+            positive_bars += 1
+        elif delta < 0:
+            negative_bars += 1
+    total = positive_bars + negative_bars
+    direction = "BULLISH" if cvd > 0 else "BEARISH"
+    streak_pct = (positive_bars / total * 100) if total > 0 else 0
+    return f"cvd={_fmt_num(cvd)}, direction={direction}, buy_bars={positive_bars}/{total}({streak_pct:.0f}%)"
+
+
 def format_coinglass_taker(action: str, data: Any) -> str:
     tool = "coinglass_taker"
 
     if action in {"coin_history", "pair_history"}:
-        return _format_last_points(
+        base = _format_last_points(
             tool,
             action,
             data,
@@ -1912,6 +1961,13 @@ def format_coinglass_taker(action: str, data: Any) -> str:
                 ),
             ],
         )
+        # Append CVD summary
+        cvd = _cvd_summary(data)
+        if cvd:
+            lines = base.split("\n")
+            lines.insert(1, cvd)
+            return "\n".join(lines)
+        return base
 
     if action == "by_exchange":
         rows: list[dict[str, Any]] = []
