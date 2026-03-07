@@ -1630,17 +1630,14 @@ async def coinglass_ob_large_orders(
             "limit": limit,
         }
     elif action == "large_orders":
-        if not exchanges or not (symbol or pair):
-            raise ValueError("Action 'large_orders' requires exchanges + symbol/pair.")
-        endpoint = "/api/large-orders"
-        params = {
-            "exchanges": exchanges,
-            "symbol": symbol or pair,
-            "type": market_type or "futures",
-            "startTime": start_time,
-            "endTime": end_time,
-            "limit": limit,
-        }
+        # /api/large-orders is deprecated (404). Redirect to current endpoint.
+        large_exchange = exchange or (exchanges.split(",")[0] if exchanges else "Binance")
+        large_symbol = symbol or pair
+        if not large_symbol:
+            raise ValueError("Action 'large_orders' requires symbol/pair (e.g., symbol='BTCUSDT').")
+        resolved_symbol = await resolve_instrument_id(client, large_exchange, large_symbol)
+        endpoint = "/api/futures/orderbook/large-limit-order"
+        params = {"exchange": large_exchange, "symbol": resolved_symbol}
     elif action == "legacy_current":
         if not (ex_name or exchange) or not (symbol or pair):
             raise ValueError(
@@ -2188,6 +2185,13 @@ async def coinglass_spot(
         params = {}
 
     data = await request_with_fallback(client, endpoints[action], params)
+
+    # Client-side symbol filtering for list endpoints (coins_markets, etc.)
+    if symbol and action == "coins_markets" and isinstance(data, list):
+        sym_upper = symbol.upper()
+        filtered = [r for r in data if str(r.get("symbol", "")).upper() == sym_upper]
+        if filtered:
+            data = filtered
 
     return ok(
         action,
@@ -2888,6 +2892,13 @@ async def coinglass_indicators(
         params = None
 
     data = await request_with_fallback(client, endpoints[action], params)
+
+    # Client-side symbol filtering for list endpoints (rsi, etc.)
+    if symbol and action == "rsi" and isinstance(data, list):
+        sym_upper = symbol.upper()
+        filtered = [r for r in data if str(r.get("symbol", "")).upper() == sym_upper]
+        if filtered:
+            data = filtered
 
     return ok(action, data, symbol=symbol)
 
