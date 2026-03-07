@@ -326,8 +326,9 @@ def _truncate(lines: list[str], total_items: int | None, shown_items: int | None
 
 
 def _format_passthrough(tool: str, action: str, data: Any) -> str:
-    body = json.dumps(data, ensure_ascii=False, default=str)
-    return _truncate([_header(tool, action, data), body], total_items=None, shown_items=None)
+    body = json.dumps(data, ensure_ascii=False, default=str, indent=2)
+    lines = [_header(tool, action, data)] + body.splitlines()
+    return _truncate(lines, total_items=None, shown_items=None)
 
 
 def _as_timeseries_rows(data: Any) -> list[dict[str, Any]]:
