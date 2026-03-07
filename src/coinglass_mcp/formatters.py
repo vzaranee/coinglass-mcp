@@ -249,9 +249,11 @@ def _find_time_value(item: dict[str, Any]) -> Any:
 
 def _detect_timestamp(data: Any) -> str:
     if isinstance(data, list) and data and isinstance(data[-1], dict):
-        time_value = _find_time_value(data[-1])
-        if time_value is not None:
-            return _to_utc(time_value)
+        # For order lists, find the newest timestamp (not the last element which may be oldest)
+        time_values = [_find_time_value(r) for r in data if isinstance(r, dict)]
+        time_values = [t for t in time_values if t is not None]
+        if time_values:
+            return _to_utc(max(time_values))
     if isinstance(data, dict):
         time_value = _find_time_value(data)
         if time_value is not None:
@@ -1387,9 +1389,11 @@ def format_coinglass_liq_orders(action: str, data: Any) -> str:
 
         label = _bucket_label(price)
         cell = buckets.setdefault(label, {"long": 0.0, "short": 0.0})
-        if "long" in side_raw or side_raw == "2":
+        # CoinGlass liq orders: side=1 = long liquidation (forced sell), side=2 = short liquidation (forced buy)
+        # This is OPPOSITE to large_orders convention
+        if "long" in side_raw or side_raw == "1":
             cell["long"] += value
-        elif "short" in side_raw or side_raw == "1":
+        elif "short" in side_raw or side_raw == "2":
             cell["short"] += value
         else:
             # Unknown side: split evenly to keep total accounted.
