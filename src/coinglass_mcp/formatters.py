@@ -1184,6 +1184,7 @@ def format_coinglass_liq_history(action: str, data: Any) -> str:
                     _pick(
                         r,
                         "long_volUsd",
+                        "aggregated_long_liquidation_usd",
                         "long_liquidation_usd",
                         "longLiquidation_usd",
                         "long_liq",
@@ -1196,6 +1197,7 @@ def format_coinglass_liq_history(action: str, data: Any) -> str:
                     _pick(
                         r,
                         "short_volUsd",
+                        "aggregated_short_liquidation_usd",
                         "short_liquidation_usd",
                         "shortLiquidation_usd",
                         "short_liq",
@@ -1210,6 +1212,7 @@ def format_coinglass_liq_history(action: str, data: Any) -> str:
                             _pick(
                                 r,
                                 "long_volUsd",
+                                "aggregated_long_liquidation_usd",
                                 "long_liquidation_usd",
                                 "longLiquidation_usd",
                                 "long_liq",
@@ -1225,6 +1228,7 @@ def format_coinglass_liq_history(action: str, data: Any) -> str:
                             _pick(
                                 r,
                                 "short_volUsd",
+                                "aggregated_short_liquidation_usd",
                                 "short_liquidation_usd",
                                 "shortLiquidation_usd",
                                 "short_liq",
@@ -1617,14 +1621,17 @@ def format_coinglass_whale_positions(action: str, data: Any) -> str:
             tool,
             action,
             data,
-            ["user", "symbol", "size", "entry", "position_usd", "pnl"],
+            ["user", "symbol", "size", "entry", "liq_price", "leverage", "position_usd", "pnl", "updated"],
             lambda r: [
                 str(_pick(r, "user", "exchange", "exName") or "-"),
                 str(_pick(r, "symbol", "coin") or "-"),
                 _fmt_num(_pick(r, "position_size", "size", "notional", "value", "amount")),
                 _fmt_num(_pick(r, "entry_price", "entry", "entryPrice"), use_suffix=False),
+                _fmt_num(_pick(r, "liq_price", "liquidation_price"), use_suffix=False),
+                str(_pick(r, "leverage") or "-"),
                 _fmt_num(_pick(r, "position_value_usd", "notional", "value", "amount")),
                 _fmt_num(_pick(r, "unrealized_pnl", "pnl", "profit")),
+                _to_utc(_pick(r, "update_time", "updateTime")),
             ],
             sort_keys=("position_value_usd", "notional", "size", "value", "amount"),
         )
@@ -2168,12 +2175,14 @@ def format_coinglass_indicators(action: str, data: Any) -> str:
             tool,
             action,
             data,
-            ["symbol", "rsi"],
+            ["symbol", "rsi_1h", "rsi_4h", "rsi_24h"],
             lambda r: [
                 str(_pick(r, "symbol", "coin") or "-"),
-                _fmt_num(_pick(r, "rsi", "value"), use_suffix=False),
+                _fmt_num(_pick(r, "rsi_1h", "rsi", "value"), use_suffix=False),
+                _fmt_num(_pick(r, "rsi_4h") or "-", use_suffix=False),
+                _fmt_num(_pick(r, "rsi_24h") or "-", use_suffix=False),
             ],
-            sort_keys=("rsi", "value"),
+            sort_keys=("rsi_1h", "rsi", "value"),
         )
 
     if action == "ahr999":
