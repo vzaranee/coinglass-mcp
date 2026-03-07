@@ -12,10 +12,10 @@ from datetime import datetime, timezone
 from numbers import Number
 from typing import Any, Callable
 
-MAX_OUTPUT_CHARS = 3000
-FALLBACK_JSON_CHARS = 2000
-TOP_N = 10
-TIME_SERIES_N = 10
+MAX_OUTPUT_CHARS = 4000
+FALLBACK_JSON_CHARS = 3000
+TOP_N = 15
+TIME_SERIES_N = 24
 
 PASS_THROUGH_TOOLS = {
     "coinglass_config",
@@ -787,7 +787,7 @@ def format_coinglass_price_history(action: str, data: Any) -> str:
             _fmt_num(_pick(r, "h", "high"), use_suffix=False),
             _fmt_num(_pick(r, "l", "low"), use_suffix=False),
             _fmt_num(_pick(r, "c", "close"), use_suffix=False),
-            _fmt_num(_pick(r, "v", "volume", "vol")),
+            _fmt_num(_pick(r, "v", "volume", "vol", "volume_usd", "volumeUsd")),
         ],
     )
 
@@ -1392,7 +1392,22 @@ def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
         if not levels:
             return _truncate([_header(tool, action, data), "No data returned"], None, None)
 
-        top_levels = levels[:TOP_N]
+        # Split into above/below current price for balanced view (long pain + short pain)
+        half = TOP_N // 2
+        top_above = levels[:half]  # highest liq levels (already sorted by volume desc)
+        # Find levels below median price to show long liquidation risk
+        if levels:
+            median_price = sorted([p for p, _ in levels])[len(levels) // 2]
+            below_levels = sorted(
+                [(p, v) for p, v in levels if p < median_price],
+                key=lambda x: x[1], reverse=True
+            )[:half]
+            top_levels = top_above + below_levels
+            # Sort final list by price descending for readability
+            top_levels = sorted(top_levels, key=lambda x: x[0], reverse=True)
+        else:
+            top_levels = top_above
+
         lines = [_header(tool, action, data)]
         lines += _render_table(
             ["price_level", "liq_volume"],
@@ -1558,7 +1573,7 @@ def format_coinglass_ob_large_orders(action: str, data: Any) -> str:
             "time": _pick(r, "start_time", "current_time", "order_end_time", "time", "timestamp"),
         })
 
-    top5 = sorted(normalized, key=lambda x: x["volume"], reverse=True)[:5]
+    top5 = sorted(normalized, key=lambda x: x["volume"], reverse=True)[:TOP_N]
 
     lines = [
         _header(tool, action, data),
