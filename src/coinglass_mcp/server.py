@@ -465,6 +465,9 @@ async def coinglass_market_info(
     exchange: Annotated[
         str | None, Field(description="Filter by exchange (e.g., 'Binance', 'OKX')")
     ] = None,
+    symbol: Annotated[
+        str | None, Field(description="Filter pairs by base coin (e.g., 'ETH', 'BTC')")
+    ] = None,
     ctx: Context = None,
 ) -> dict:
     """Get static market metadata from CoinGlass.
@@ -475,6 +478,7 @@ async def coinglass_market_info(
     Examples:
         - Get all futures coins: action="coins"
         - Get Binance pairs: action="pairs", exchange="Binance"
+        - Get ETH pairs on Binance: action="pairs", exchange="Binance", symbol="ETH"
         - List all exchanges: action="exchanges"
     """
     client = get_client(ctx)
@@ -488,7 +492,17 @@ async def coinglass_market_info(
             "/api/futures/supported-exchange-pairs",
             {"exchange": exchange} if exchange else None,
         )
-        return ok(action, data, exchange=exchange)
+        # Client-side symbol filter for pairs
+        if symbol:
+            sym_upper = symbol.upper()
+            def _match(r: dict) -> bool:
+                return (str(r.get("base_asset", r.get("baseAsset", r.get("symbol", "")))).upper() == sym_upper
+                        or sym_upper in str(r.get("instrument_id", r.get("instrumentId", r.get("pair", "")))).upper())
+            if isinstance(data, dict):
+                data = {k: [r for r in v if isinstance(r, dict) and _match(r)] for k, v in data.items() if isinstance(v, list)}
+            elif isinstance(data, list):
+                data = [r for r in data if isinstance(r, dict) and _match(r)]
+        return ok(action, data, exchange=exchange, symbol=symbol)
 
     elif action == "exchanges":
         data = await client.request("/api/futures/supported-exchange-pairs")
@@ -1540,8 +1554,10 @@ async def coinglass_ob_large_orders(
 
     if action == "current":
         current_symbol = symbol or pair
-        if not exchange or not current_symbol:
-            raise ValueError("Action 'current' requires exchange + symbol/pair.")
+        if not exchange:
+            exchange = "Binance"  # sensible default for large orders
+        if not current_symbol:
+            raise ValueError("Action 'current' requires symbol or pair (e.g., symbol='ETHUSDT').")
         resolved_symbol = await resolve_instrument_id(client, exchange, current_symbol)
         endpoint = "/api/futures/orderbook/large-limit-order"
         params = {"exchange": exchange, "symbol": resolved_symbol}

@@ -667,7 +667,7 @@ def format_coinglass_calendar(action: str, data: Any) -> str:
                 _to_utc(_pick(r, "publish_timestamp", "time", "timestamp") or _find_time_value(r)),
                 stars_map.get(int(_as_float(_pick(r, "importance_level", "importance")) or 0), "?"),
                 str(_pick(r, "country_code", "country_name", "country") or "-"),
-                str(_pick(r, "calendar_name", "event_name", "title", "name") or "-")[:40],
+                str(_pick(r, "calendar_name", "event_name", "title", "name") or "-")[:60],
                 str(_pick(r, "published_value", "actual_value", "actual") or "-"),
                 str(_pick(r, "forecast_value", "forecast") or "-"),
                 str(_pick(r, "previous_value", "previous") or "-"),
@@ -1491,10 +1491,11 @@ def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
                         by_price_lev[price]["degen"] += vol
 
             if by_price_total:
-                # Balanced above/below median
+                # Balanced above/below median — more levels for heatmap (10 per side)
                 all_prices = sorted(by_price_total.keys())
                 median_price = all_prices[len(all_prices) // 2]
-                half = TOP_N // 2
+                HEATMAP_PER_SIDE = 10
+                half = HEATMAP_PER_SIDE
 
                 above = sorted(
                     [(p, v) for p, v in by_price_total.items() if p >= median_price],
