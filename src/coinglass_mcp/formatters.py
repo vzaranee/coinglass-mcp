@@ -19,8 +19,6 @@ TIME_SERIES_N = 24
 
 PASS_THROUGH_TOOLS = {
     "coinglass_config",
-    "coinglass_search",
-    "coinglass_article",
     "coinglass_calendar",
     "coinglass_market_info",
 }
@@ -642,10 +640,6 @@ def _format_default(tool: str, action: str, data: Any, limit: int = TIME_SERIES_
 # =============================================================================
 # TOOL FORMATTERS (26)
 # =============================================================================
-
-
-def format_coinglass_article(action: str, data: Any) -> str:
-    return _format_passthrough("coinglass_article", action, data)
 
 
 def format_coinglass_calendar(action: str, data: Any) -> str:
@@ -2087,39 +2081,6 @@ def format_coinglass_etf(action: str, data: Any) -> str:
     return _format_default(tool, action, data, limit=5)
 
 
-def format_coinglass_grayscale(action: str, data: Any) -> str:
-    tool = "coinglass_grayscale"
-
-    if action == "holdings":
-        return _format_generic_top(
-            tool,
-            action,
-            data,
-            ["fund", "shares", "nav", "premium"],
-            lambda r: [
-                str(_pick(r, "fund", "ticker", "symbol") or "-"),
-                _fmt_num(_pick(r, "shares", "share_count", "shareCount")),
-                _fmt_num(_pick(r, "nav", "net_asset_value", "netAssetValue")),
-                _fmt_pct(_pick(r, "premium", "premium_discount", "premiumDiscount")),
-            ],
-            sort_keys=("nav", "net_asset_value", "netAssetValue"),
-        )
-
-    if action == "premium":
-        return _format_last_points(
-            tool,
-            action,
-            data,
-            ["time", "premium"],
-            lambda r: [
-                _to_utc(_find_time_value(r)),
-                _fmt_pct(_pick(r, "premium", "premium_discount", "value")),
-            ],
-        )
-
-    raise ValueError(f"No formatter action for {tool}:{action}")
-
-
 def format_coinglass_indicators(action: str, data: Any) -> str:
     tool = "coinglass_indicators"
 
@@ -2245,10 +2206,6 @@ def format_coinglass_indicators(action: str, data: Any) -> str:
             _fmt_num(_pick(r, "value", "c", "close", "index"), use_suffix=False),
         ],
     )
-
-
-def format_coinglass_search(action: str, data: Any) -> str:
-    return _format_passthrough("coinglass_search", action, data)
 
 
 def format_coinglass_config(action: str, data: Any) -> str:
