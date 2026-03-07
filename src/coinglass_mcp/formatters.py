@@ -1386,14 +1386,69 @@ def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
     tool = "coinglass_liq_heatmap"
 
     if action in {"coin_heatmap", "pair_heatmap"}:
+        # Try rich 3D format first: y_axis + liquidation_leverage_data
+        y_axis = data.get("y_axis", []) if isinstance(data, dict) else []
+        lev_data = data.get("liquidation_leverage_data", []) if isinstance(data, dict) else []
+
+        if y_axis and lev_data:
+            # Aggregate by price level with leverage buckets
+            from collections import defaultdict
+            by_price_total = defaultdict(float)
+            by_price_lev = defaultdict(lambda: defaultdict(float))
+            for y_idx, lev, vol in lev_data:
+                if y_idx < len(y_axis) and y_axis[y_idx] > 0:
+                    price = y_axis[y_idx]
+                    by_price_total[price] += vol
+                    # Group into buckets: low (≤10x), med (11-25x), high (26-50x), degen (>50x)
+                    if lev <= 10:
+                        by_price_lev[price]["low"] += vol
+                    elif lev <= 25:
+                        by_price_lev[price]["med"] += vol
+                    elif lev <= 50:
+                        by_price_lev[price]["high"] += vol
+                    else:
+                        by_price_lev[price]["degen"] += vol
+
+            if by_price_total:
+                # Balanced above/below median
+                all_prices = sorted(by_price_total.keys())
+                median_price = all_prices[len(all_prices) // 2]
+                half = TOP_N // 2
+
+                above = sorted(
+                    [(p, v) for p, v in by_price_total.items() if p >= median_price],
+                    key=lambda x: x[1], reverse=True
+                )[:half]
+                below = sorted(
+                    [(p, v) for p, v in by_price_total.items() if p < median_price],
+                    key=lambda x: x[1], reverse=True
+                )[:half]
+                top_levels = sorted(above + below, key=lambda x: x[0], reverse=True)
+
+                lines = [_header(tool, action, data)]
+                lines += _render_table(
+                    ["price", "total", "low≤10x", "med11-25x", "high26-50x", "degen>50x"],
+                    [
+                        [
+                            _fmt_num(price, use_suffix=False),
+                            _fmt_num(vol),
+                            _fmt_num(by_price_lev[price].get("low", 0)),
+                            _fmt_num(by_price_lev[price].get("med", 0)),
+                            _fmt_num(by_price_lev[price].get("high", 0)),
+                            _fmt_num(by_price_lev[price].get("degen", 0)),
+                        ]
+                        for price, vol in top_levels
+                    ],
+                )
+                return _truncate(lines, total_items=len(by_price_total), shown_items=len(top_levels))
+
+        # Fallback: flat levels without leverage breakdown
         levels = _extract_depth_levels(data)
         if not levels:
             return _truncate([_header(tool, action, data), "No data returned"], None, None)
 
-        # Split into above/below current price for balanced view (long pain + short pain)
         half = TOP_N // 2
-        top_above = levels[:half]  # highest liq levels (already sorted by volume desc)
-        # Find levels below median price to show long liquidation risk
+        top_above = levels[:half]
         if levels:
             median_price = sorted([p for p, _ in levels])[len(levels) // 2]
             below_levels = sorted(
@@ -1401,7 +1456,6 @@ def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
                 key=lambda x: x[1], reverse=True
             )[:half]
             top_levels = top_above + below_levels
-            # Sort final list by price descending for readability
             top_levels = sorted(top_levels, key=lambda x: x[0], reverse=True)
         else:
             top_levels = top_above
@@ -1912,21 +1966,35 @@ def format_coinglass_options(action: str, data: Any) -> str:
         return _truncate(lines, total_items=len(rows), shown_items=len(selected))
 
     if action == "max_pain":
-        return _format_generic_top(
-            tool,
-            action,
-            data,
+        rows = _records(data)
+        if not rows and isinstance(data, dict):
+            rows = [data]
+        if not rows:
+            return _truncate([_header(tool, action, data), "No data returned"], None, None)
+
+        # Calculate aggregate P/C ratio from all expiries
+        total_call = sum(_as_float(_pick(r, "call_open_interest", "call_oi", "callOi")) or 0 for r in rows)
+        total_put = sum(_as_float(_pick(r, "put_open_interest", "put_oi", "putOi")) or 0 for r in rows)
+        pc_ratio = f"{total_put / total_call:.2f}" if total_call > 0 else "-"
+
+        selected = _top(rows, sort_keys=("date", "expiry_time", "expiry"), limit=TOP_N)
+        lines = [_header(tool, action, data)]
+        lines.append(f"summary=put_call_ratio:{pc_ratio}, total_call:{_fmt_num(total_call)}, total_put:{_fmt_num(total_put)}")
+        lines += _render_table(
             ["date", "max_pain", "call_oi", "put_oi", "call_notional", "put_notional"],
-            lambda r: [
-                str(_pick(r, "date", "expiry") or "-"),
-                _fmt_num(_pick(r, "max_pain_price", "maxPainPrice"), use_suffix=False),
-                _fmt_num(_pick(r, "call_open_interest", "call_oi", "callOi")),
-                _fmt_num(_pick(r, "put_open_interest", "put_oi", "putOi")),
-                _fmt_num(_pick(r, "call_open_interest_notional", "call_notional")),
-                _fmt_num(_pick(r, "put_open_interest_notional", "put_notional")),
+            [
+                [
+                    str(_pick(r, "date", "expiry") or "-"),
+                    _fmt_num(_pick(r, "max_pain_price", "maxPainPrice"), use_suffix=False),
+                    _fmt_num(_pick(r, "call_open_interest", "call_oi", "callOi")),
+                    _fmt_num(_pick(r, "put_open_interest", "put_oi", "putOi")),
+                    _fmt_num(_pick(r, "call_open_interest_notional", "call_notional")),
+                    _fmt_num(_pick(r, "put_open_interest_notional", "put_notional")),
+                ]
+                for r in selected
             ],
-            sort_keys=("date", "expiry_time", "expiry"),
         )
+        return _truncate(lines, total_items=len(rows), shown_items=len(selected))
 
     if action == "volume_history":
         return _format_last_points(
