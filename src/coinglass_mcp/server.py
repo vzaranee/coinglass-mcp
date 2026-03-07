@@ -2228,14 +2228,14 @@ async def coinglass_options(
         Literal["BTC", "ETH"], Field(description="BTC or ETH only")
     ],
     exchange: Annotated[
-        Optional[str], Field(description="Exchange for max_pain (e.g., Deribit, OKX)")
+        Optional[str], Field(description="Exchange for max_pain action (defaults to Deribit if omitted). Options: Deribit, OKX, Binance, Bybit, CME")
     ] = None,
     range: Annotated[
-        str | None, Field(description="Time range: 7d, 30d, 90d")
+        str | None, Field(description="Time range for oi_history: 1h, 4h, 12h, all (defaults to 4h). For other tools: 7d, 30d, 90d")
     ] = None,
     unit: Annotated[
         Optional[str],
-        Field(description="Unit for oi_history action (required by API)"),
+        Field(description="Unit for oi_history/volume_history (defaults to USD). For BTC use USD or BTC, for ETH use USD or ETH"),
     ] = None,
     ctx: Context = None,
 ) -> dict:
@@ -2259,11 +2259,12 @@ async def coinglass_options(
     }
 
     if action == "max_pain" and not exchange:
-        raise ValueError("Action 'max_pain' requires exchange (e.g., exchange='Deribit').")
-    if action == "oi_history" and (not unit or not range):
-        raise ValueError("Action 'oi_history' requires unit + range.")
-    if action == "volume_history" and not unit:
-        raise ValueError("Action 'volume_history' requires unit.")
+        exchange = "Deribit"  # Default to largest options exchange
+    if action == "oi_history":
+        unit = unit or "USD"
+        range = range or "4h"  # API supports: 1h, 4h, 12h, all
+    if action == "volume_history":
+        unit = unit or "USD"
 
     if action == "max_pain":
         params = {"symbol": symbol, "exchange": exchange}
