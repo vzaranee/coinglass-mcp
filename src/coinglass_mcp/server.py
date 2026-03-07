@@ -2193,7 +2193,7 @@ async def coinglass_options(
         ),
     ],
     symbol: Annotated[
-        Literal["BTC", "ETH"], Field(description="BTC or ETH only")
+        str, Field(description="Coin symbol (e.g., 'BTC', 'ETH', 'SOL')")
     ],
     exchange: Annotated[
         Optional[str], Field(description="Exchange for max_pain action (defaults to Deribit if omitted). Options: Deribit, OKX, Binance, Bybit, CME")
@@ -2423,7 +2423,7 @@ async def coinglass_etf(
         ),
     ],
     asset: Annotated[
-        Literal["bitcoin", "ethereum"], Field(description="BTC or ETH ETFs")
+        str | None, Field(description="Asset for generic actions: bitcoin, ethereum, solana, xrp")
     ] = "bitcoin",
     ticker: Annotated[
         str | None, Field(description="ETF ticker: IBIT, GBTC, ETHE")
@@ -2848,16 +2848,12 @@ async def coinglass_config(
     plan = get_plan(ctx)
 
     if action == "exchanges":
+        client = get_client(ctx)
+        futures_ex = await client.request("/api/futures/supported-exchanges")
+        # Spot and options don't have dedicated list endpoints — use futures as reference
         data = {
-            "futures": [
-                "Binance", "OKX", "Bybit", "dYdX", "Bitget",
-                "Huobi", "Gate", "CoinEx", "Kraken", "BingX",
-            ],
-            "spot": [
-                "Binance", "OKX", "Coinbase", "Bybit", "Kraken",
-                "Huobi", "Gate", "Bitfinex", "KuCoin",
-            ],
-            "options": ["Deribit", "OKX", "Binance", "Bybit"],
+            "futures": futures_ex if isinstance(futures_ex, list) else [],
+            "note": "Use coinglass_market_info(action='exchanges') for full pair-level exchange list",
         }
     elif action == "intervals":
         all_intervals = list(PLAN_INTERVALS.get("enterprise", set()))
