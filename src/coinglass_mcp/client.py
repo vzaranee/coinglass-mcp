@@ -101,8 +101,11 @@ class CoinGlassClient:
         response.raise_for_status()
         data = response.json()
 
+        if not isinstance(data, dict):
+            raise APIError("Unexpected API response shape: expected JSON object")
+
         # CoinGlass API returns code "0" for success
-        if data.get("code") != "0":
+        if data.get("code") not in (0, "0"):
             raise APIError(f"API error: {data.get('msg', 'Unknown error')}")
 
         return data.get("data")

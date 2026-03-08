@@ -180,6 +180,38 @@ def _to_utc_seconds(value: Any) -> str:
     return _to_utc(int(number))
 
 
+def _to_epoch_seconds(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        numeric = _as_float(stripped)
+        if numeric is not None and stripped.replace(".", "", 1).replace("-", "", 1).isdigit():
+            value = numeric
+        else:
+            iso = stripped.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(iso)
+            except ValueError:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).timestamp()
+
+    number = _as_float(value)
+    if number is None:
+        return None
+
+    if abs(number) > 1e14:
+        return number / 1_000_000
+    if abs(number) > 1e11:
+        return number / 1_000
+    return number
+
+
 def _records(data: Any) -> list[dict[str, Any]]:
     payload = _list_payload(data)
     if payload:
@@ -247,26 +279,34 @@ def _find_time_value(item: dict[str, Any]) -> Any:
 
 
 def _detect_timestamp(data: Any) -> str:
-    if isinstance(data, list) and data and isinstance(data[-1], dict):
-        # For order lists, find the newest timestamp (not the last element which may be oldest)
-        time_values = [_find_time_value(r) for r in data if isinstance(r, dict)]
-        time_values = [t for t in time_values if t is not None]
-        if time_values:
-            return _to_utc(max(time_values))
+    max_timestamp: float | None = None
+
+    def consider(value: Any) -> None:
+        nonlocal max_timestamp
+        ts = _to_epoch_seconds(value)
+        if ts is None:
+            return
+        if max_timestamp is None or ts > max_timestamp:
+            max_timestamp = ts
+
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict):
+                consider(_find_time_value(item))
     if isinstance(data, dict):
-        time_value = _find_time_value(data)
-        if time_value is not None:
-            return _to_utc(time_value)
+        consider(_find_time_value(data))
         for list_key in ("time_list", "date_list", "dateList"):
             val = data.get(list_key)
             if isinstance(val, list) and val:
-                return _to_utc(val[-1])
+                for candidate in val:
+                    consider(candidate)
         rows = _records(data)
-        if rows:
-            tv = _find_time_value(rows[-1])
-            if tv is not None:
-                return _to_utc(tv)
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
+        for row in rows:
+            consider(_find_time_value(row))
+
+    if max_timestamp is None:
+        return "-"
+    return _to_utc(max_timestamp)
 
 
 def _header(tool: str, action: str, data: Any) -> str:
@@ -1501,19 +1541,32 @@ def format_coinglass_liq_heatmap(action: str, data: Any) -> str:
             from collections import defaultdict
             by_price_total = defaultdict(float)
             by_price_lev = defaultdict(lambda: defaultdict(float))
-            for y_idx, lev, vol in lev_data:
-                if y_idx < len(y_axis) and y_axis[y_idx] > 0:
-                    price = y_axis[y_idx]
-                    by_price_total[price] += vol
-                    # Group into buckets: low (≤10x), med (11-25x), high (26-50x), degen (>50x)
-                    if lev <= 10:
-                        by_price_lev[price]["low"] += vol
-                    elif lev <= 25:
-                        by_price_lev[price]["med"] += vol
-                    elif lev <= 50:
-                        by_price_lev[price]["high"] += vol
-                    else:
-                        by_price_lev[price]["degen"] += vol
+            for point in lev_data:
+                if not isinstance(point, (list, tuple)) or len(point) < 3:
+                    continue
+                y_idx_raw, lev_raw, vol_raw = point[0], point[1], point[2]
+                y_idx_num = _as_float(y_idx_raw)
+                lev = _as_float(lev_raw)
+                vol = _as_float(vol_raw)
+                if y_idx_num is None or lev is None or vol is None:
+                    continue
+                y_idx = int(y_idx_num)
+                if y_idx < 0 or y_idx >= len(y_axis):
+                    continue
+                price = _as_float(y_axis[y_idx])
+                if price is None or price <= 0:
+                    continue
+
+                by_price_total[price] += vol
+                # Group into buckets: low (≤10x), med (11-25x), high (26-50x), degen (>50x)
+                if lev <= 10:
+                    by_price_lev[price]["low"] += vol
+                elif lev <= 25:
+                    by_price_lev[price]["med"] += vol
+                elif lev <= 50:
+                    by_price_lev[price]["high"] += vol
+                else:
+                    by_price_lev[price]["degen"] += vol
 
             if by_price_total:
                 # Balanced above/below median — more levels for heatmap (10 per side)
@@ -2096,9 +2149,17 @@ def format_coinglass_spot(action: str, data: Any) -> str:
                 _fmt_num(_pick(r, "current_price", "price", "close", "c"), use_suffix=False),
                 _fmt_pct(_pick(r, "price_change_percent_24h", "change_24h", "change24h")),
                 _fmt_num(
-                    (_as_float(_pick(r, "volume_usd_24h", "volume_usd", "volume_24h", "volume24h")) or 0.0)
-                    + (_as_float(_pick(r, "buy_volume_usd_24h")) or 0.0)
-                    + (_as_float(_pick(r, "sell_volume_usd_24h")) or 0.0)
+                    total_volume
+                    if (
+                        total_volume := _as_float(
+                            _pick(r, "volume_usd_24h", "volume_usd", "volume_24h", "volume24h")
+                        )
+                    )
+                    is not None
+                    else (
+                        (_as_float(_pick(r, "buy_volume_usd_24h", "buy_volume_usd", "buy_volume")) or 0.0)
+                        + (_as_float(_pick(r, "sell_volume_usd_24h", "sell_volume_usd", "sell_volume")) or 0.0)
+                    )
                 ),
             ],
             sort_keys=("volume_usd_24h", "volume_usd", "volume_24h", "volume24h"),
@@ -2255,7 +2316,8 @@ def format_coinglass_etf(action: str, data: Any) -> str:
 
         sorted_rows = sorted(
             rows,
-            key=lambda r: _as_float(_pick(r, "timestamp", "time", "date")) or float("-inf"),
+            key=lambda r: _to_epoch_seconds(_pick(r, "timestamp", "time", "date"))
+            or float("-inf"),
         )
         selected = sorted_rows[-5:]
 

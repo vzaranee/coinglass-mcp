@@ -18,11 +18,13 @@ This server provides 22 tools for accessing CoinGlass API data including:
 
 import os
 import inspect
+import secrets
 from contextlib import asynccontextmanager
 from typing import Annotated, Any, Literal, Optional
 
 import httpx
 from fastmcp import Context, FastMCP
+from fastmcp.server.auth import AccessToken, TokenVerifier
 from pydantic import Field
 
 from coinglass_mcp.client import CoinGlassClient
@@ -143,6 +145,19 @@ def check_params(action: str, **kwargs: Any) -> None:
         raise ValueError(
             f"Action '{action}' requires parameters: {', '.join(missing)}"
         )
+
+
+class StaticBearerTokenVerifier(TokenVerifier):
+    """Simple bearer token verifier for optional SSE auth."""
+
+    def __init__(self, token: str):
+        super().__init__()
+        self._token = token
+
+    async def verify_token(self, token: str) -> AccessToken | None:
+        if not token or not secrets.compare_digest(token, self._token):
+            return None
+        return AccessToken(token=token, client_id="static-bearer", scopes=[])
 
 
 def ok(action: str, data: Any, **meta: Any) -> dict:
@@ -1066,7 +1081,7 @@ async def coinglass_long_short(
     if action == "taker_ratio":
         params = {
             "exchange_list": exchange,
-            "symbol": pair or symbol,
+            "symbol": pair,
             "interval": interval,
             "limit": limit,
             "start_time": start_time,
@@ -1699,13 +1714,15 @@ async def coinglass_whale_positions(
     }
 
     if action == "alerts":
-        params = None
+        params = {"user": user} if user else None
     elif action == "positions":
-        params = None
+        params = {"user": user} if user else None
     else:
-        if not symbol:
-            raise ValueError("Action 'all_positions' requires symbol (e.g., symbol='BTC').")
-        params = {"symbol": symbol, "current_page": str(page)}
+        params = {"current_page": str(page)}
+        if symbol:
+            params["symbol"] = symbol
+        if user:
+            params["user"] = user
     data = await client.request(endpoints[action], params)
 
     # Client-side symbol filter for positions (API returns all coins)
@@ -1877,7 +1894,7 @@ async def coinglass_taker(
                 "Action 'aggregated_ratio' is only available for futures market"
             )
         params = {
-            "exchange_list": exchange or "Binance",
+            "exchange_list": exchange_list or exchange or "Binance",
             "symbol": symbol,
             "interval": interval,
             "limit": limit,
@@ -2423,7 +2440,7 @@ async def coinglass_etf(
         ),
     ],
     asset: Annotated[
-        str | None, Field(description="Asset for generic actions: bitcoin, ethereum, solana, xrp")
+        str | None, Field(description="Asset for generic actions: bitcoin, ethereum, solana, xrp, hk")
     ] = "bitcoin",
     ticker: Annotated[
         str | None, Field(description="ETF ticker: IBIT, GBTC, ETHE")
@@ -2454,23 +2471,45 @@ async def coinglass_etf(
         - IBIT premium: action="premium", ticker="IBIT"
     """
     client = get_client(ctx)
+    requested_asset = (asset or "bitcoin").strip().lower() or "bitcoin"
+
+    generic_list_endpoints = {
+        "bitcoin": "/api/etf/bitcoin/list",
+        "ethereum": "/api/etf/ethereum/list",
+    }
+    generic_flows_endpoints = {
+        "bitcoin": "/api/etf/bitcoin/flow-history",
+        "ethereum": "/api/etf/ethereum/flow-history",
+        "solana": "/api/etf/solana/flow-history",
+        "xrp": "/api/etf/xrp/flow-history",
+        "hk": "/api/hk-etf/bitcoin/flow-history",
+    }
+    generic_net_assets_endpoints = {
+        "bitcoin": "/api/etf/bitcoin/net-assets/history",
+        "ethereum": "/api/etf/ethereum/net-assets/history",
+    }
+
+    if action == "list" and requested_asset not in generic_list_endpoints:
+        raise ValueError(
+            "Action 'list' supports asset='bitcoin' or asset='ethereum'."
+        )
+    if action == "flows" and requested_asset not in generic_flows_endpoints:
+        raise ValueError(
+            "Action 'flows' supports asset='bitcoin', 'ethereum', 'solana', 'xrp', or 'hk'."
+        )
+    if action == "net_assets" and requested_asset not in generic_net_assets_endpoints:
+        raise ValueError(
+            "Action 'net_assets' supports asset='bitcoin' or asset='ethereum'."
+        )
+    if action in {"history", "premium", "detail", "price"} and requested_asset != "bitcoin":
+        raise ValueError(f"Action '{action}' is only available for asset='bitcoin'.")
 
     endpoints: dict[ActionETF, str] = {
-        "list": (
-            "/api/etf/bitcoin/list"
-            if asset == "bitcoin"
-            else "/api/etf/ethereum/list"
-        ),
-        "flows": (
-            "/api/etf/bitcoin/flow-history"
-            if asset == "bitcoin"
-            else "/api/etf/ethereum/flow-history"
-        ),
+        "list": generic_list_endpoints.get(requested_asset, generic_list_endpoints["bitcoin"]),
+        "flows": generic_flows_endpoints.get(requested_asset, generic_flows_endpoints["bitcoin"]),
         "history": "/api/etf/bitcoin/history",
-        "net_assets": (
-            "/api/etf/bitcoin/net-assets/history"
-            if asset == "bitcoin"
-            else "/api/etf/ethereum/net-assets/history"
+        "net_assets": generic_net_assets_endpoints.get(
+            requested_asset, generic_net_assets_endpoints["bitcoin"]
         ),
         "premium": "/api/etf/bitcoin/premium-discount/history",
         "detail": "/api/etf/bitcoin/detail",
@@ -2515,10 +2554,7 @@ async def coinglass_etf(
     elif action in explicit_asset["xrp"]:
         asset_value = "xrp"
     else:
-        asset_value = asset
-
-    if asset == "ethereum" and action in {"history", "premium", "detail", "price"}:
-        raise ValueError(f"Action '{action}' is only available for asset='bitcoin'.")
+        asset_value = requested_asset
 
     if action in {"history", "bitcoin_history", "detail", "bitcoin_detail"} and not ticker:
         raise ValueError(f"Action '{action}' requires ticker (e.g., ticker='IBIT').")
@@ -2545,7 +2581,7 @@ async def coinglass_etf(
     elif action in {"premium", "bitcoin_premium_discount", "bitcoin_net_assets"}:
         params = {"ticker": ticker}
     elif action == "net_assets":
-        params = {"ticker": ticker} if asset == "bitcoin" else None
+        params = {"ticker": ticker} if requested_asset == "bitcoin" else None
     else:
         params = None
 
@@ -2898,6 +2934,7 @@ def main():
         coinglass-mcp                          # stdio (Claude Desktop)
         coinglass-mcp --transport sse          # SSE on port 8000
         coinglass-mcp --transport sse --port 8100  # SSE on custom port
+        coinglass-mcp --transport sse --auth-token your-token  # SSE with bearer auth
         coinglass-mcp --transport sse --host 0.0.0.0 --port 8100  # public
     """
     import argparse
@@ -2920,9 +2957,17 @@ def main():
         default=8000,
         help="Port for SSE server (default: 8000)",
     )
+    parser.add_argument(
+        "--auth-token",
+        default=None,
+        help="Optional bearer token for SSE. If set, clients must send Authorization: Bearer <token>.",
+    )
     args = parser.parse_args()
 
     if args.transport == "sse":
+        auth_token = args.auth_token.strip() if isinstance(args.auth_token, str) else None
+        if auth_token:
+            mcp.auth = StaticBearerTokenVerifier(auth_token)
         mcp.run(transport="sse", host=args.host, port=args.port)
     else:
         mcp.run()
