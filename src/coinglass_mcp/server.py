@@ -2351,7 +2351,9 @@ async def coinglass_spot(
             raise ValueError("Action 'pairs_markets' requires symbol.")
         params = {"symbol": symbol}
     elif action == "pairs":
-        params = {"exchange": exchange} if exchange else {}
+        # Upstream spot pairs endpoint can return empty for exchange-filtered queries.
+        # Always fetch full payload and apply exchange/symbol filters client-side.
+        params = {}
     else:
         params = {}
 

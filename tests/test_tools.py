@@ -756,7 +756,13 @@ class TestActionValidationAndSpotFiltering:
                 {"base_asset": "BTC", "instrument_id": "BTC-USDT", "exchange": "OKX"},
             ],
         }
-        mock_http.get.return_value = mock_response(payload)
+
+        def _mock_get(_url, *, params=None, **_kwargs):
+            if params and params.get("exchange"):
+                return mock_response([])
+            return mock_response(payload)
+
+        mock_http.get.side_effect = _mock_get
 
         fn = get_fn(coinglass_spot)
         result = await fn(action="pairs", exchange="Binance", symbol="BTC", ctx=ctx)
@@ -767,6 +773,37 @@ class TestActionValidationAndSpotFiltering:
         metadata = result["metadata"]
         assert "exchange=Binance" in metadata["filters_applied"]
         assert "symbol=BTC" in metadata["filters_applied"]
+        assert mock_http.get.call_args.kwargs.get("params") is None
+
+    async def test_spot_pairs_exchange_filter_not_forwarded_upstream(
+        self, setup_context, mock_response
+    ):
+        """coinglass_spot pairs exchange-only filter must run client-side."""
+        ctx, mock_http = setup_context()
+        payload = {
+            "Binance": [
+                {"base_asset": "BTC", "instrument_id": "BTCUSDT", "exchange": "Binance"},
+            ],
+            "Coinbase": [
+                {"base_asset": "BTC", "instrument_id": "BTC-USD", "exchange": "Coinbase"},
+            ],
+        }
+
+        def _mock_get(_url, *, params=None, **_kwargs):
+            if params and params.get("exchange"):
+                return mock_response([])
+            return mock_response(payload)
+
+        mock_http.get.side_effect = _mock_get
+
+        fn = get_fn(coinglass_spot)
+        result = await fn(action="pairs", exchange="Coinbase", ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_spot(pairs)", "BTC-USD")
+        assert "Binance" not in text
+        metadata = result["metadata"]
+        assert "exchange=Coinbase" in metadata["filters_applied"]
+        assert mock_http.get.call_args.kwargs.get("params") is None
 
     async def test_spot_pairs_symbol_filter_avoids_prefix_false_positives(self, setup_context, mock_response):
         """Base-symbol filter should not match prefix variants like ETHW for ETH."""
