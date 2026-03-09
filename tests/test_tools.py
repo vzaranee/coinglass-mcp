@@ -767,3 +767,37 @@ class TestActionValidationAndSpotFiltering:
         metadata = result["metadata"]
         assert "exchange=Binance" in metadata["filters_applied"]
         assert "symbol=BTC" in metadata["filters_applied"]
+
+    async def test_spot_pairs_symbol_filter_avoids_prefix_false_positives(self, setup_context, mock_response):
+        """Base-symbol filter should not match prefix variants like ETHW for ETH."""
+        ctx, mock_http = setup_context()
+        payload = [
+            {"base_asset": "ETH", "instrument_id": "ETHUSDT", "exchange": "Binance"},
+            {"base_asset": "ETHW", "instrument_id": "ETHWUSDT", "exchange": "Binance"},
+        ]
+        mock_http.get.return_value = mock_response(payload)
+
+        fn = get_fn(coinglass_spot)
+        result = await fn(action="pairs", symbol="ETH", ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_spot(pairs)", "ETHUSDT")
+        assert "ETHWUSDT" not in text
+        metadata = result["metadata"]
+        assert "symbol=ETH" in metadata["filters_applied"]
+
+    async def test_spot_pairs_list_payload_symbol_filter(self, setup_context, mock_response):
+        """List payload variants should still apply strict base-symbol filtering."""
+        ctx, mock_http = setup_context()
+        payload = [
+            {"exchange_name": "Binance", "symbol": "ETH-USDT"},
+            {"exchange_name": "Binance", "pair": "ETHW-USDT"},
+            {"exchange_name": "Binance", "instrument_id": "BTCUSDT"},
+        ]
+        mock_http.get.return_value = mock_response(payload)
+
+        fn = get_fn(coinglass_spot)
+        result = await fn(action="pairs", symbol="ETH", ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_spot(pairs)", "ETH-USDT")
+        assert "ETHW-USDT" not in text
+        assert "BTCUSDT" not in text

@@ -352,9 +352,17 @@ def _matches_base_symbol(candidate: Any, base_symbol: str | None) -> bool:
         return True
 
     extracted = _extract_base_quote(text)
-    if extracted and extracted[0] == needle:
-        return True
-    return text.startswith(needle)
+    if extracted:
+        base, _ = extracted
+        if base == needle:
+            return True
+        # Handle nested variants like BTCUSDT_UMCBL.
+        nested = _extract_base_quote(base)
+        return bool(nested and nested[0] == needle)
+
+    # Fallback for tokenized strings without a recognizable quote suffix.
+    tokenized = text.replace("/", "-").replace("_", "-")
+    return needle in {part for part in tokenized.split("-") if part}
 
 
 def _spot_pair_row_matches(
