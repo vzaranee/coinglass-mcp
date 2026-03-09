@@ -296,8 +296,8 @@ Get large limit orders (whale walls).
 
 | Action | Description | Endpoint |
 |--------|-------------|----------|
-| `current` | Active large orders | `/api/futures/orderbook/large-limit-order` |
-| `history` | Historical large orders | `/api/futures/orderbook/large-limit-order-history` |
+| `current` | Active large orders (requires `symbol` or `pair`) | `/api/futures/orderbook/large-limit-order` |
+| `history` | Historical large orders (requires `exchange`, `symbol`/`pair`, `start_time`, `end_time`, `state`) | `/api/futures/orderbook/large-limit-order-history` |
 
 ### Thresholds
 - BTC: ≥$1M
@@ -312,7 +312,7 @@ ActionLargeOrders = Literal["current", "history"]
 @mcp.tool
 async def coinglass_ob_large_orders(
     action: Annotated[ActionLargeOrders, Field(
-        description="current: active large orders | history: historical large orders"
+        description="current: active large orders (requires symbol/pair) | history: historical large orders (requires exchange,symbol,start_time,end_time,state)"
     )],
     exchange: Annotated[str | None, Field(description="Filter by exchange")] = None,
     pair: Annotated[str | None, Field(description="Filter by pair")] = None,
@@ -326,7 +326,7 @@ async def coinglass_ob_large_orders(
 
 ```python
 # Current whale walls
-coinglass_ob_large_orders(action="current")
+coinglass_ob_large_orders(action="current", symbol="BTCUSDT")
 
 # BTC large orders on Binance
 coinglass_ob_large_orders(action="current", exchange="Binance", pair="BTCUSDT")
@@ -336,6 +336,9 @@ coinglass_ob_large_orders(action="history", limit=100)
 ```
 
 ### Response
+
+Runtime responses return compact `text` plus preview/truncation metadata fields
+(`truncated`, `shown_rows`, `total_rows`, `requested_limit`, `truncation_reason`).
 
 ```json
 {

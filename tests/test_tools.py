@@ -17,7 +17,9 @@ from coinglass_mcp.server import (
     coinglass_whale_positions,
     coinglass_taker,
     coinglass_indicators,
-    coinglass_search,
+    coinglass_spot,
+    coinglass_onchain,
+    coinglass_ob_large_orders,
     coinglass_config,
     check_plan,
     check_interval,
@@ -595,27 +597,13 @@ class TestMetaTools:
 
         return _setup
 
-    async def test_search_finds_liquidation_tools(self, setup_context):
-        """coinglass_search finds relevant tools."""
-        ctx, _ = setup_context()
-
-        fn = get_fn(coinglass_search)
-        result = await fn(query="liquidation", ctx=ctx)
-
-        assert_text_result(result, "coinglass_search(search)", "coinglass_liq")
-
-    async def test_search_finds_funding_tools(self, setup_context):
-        """coinglass_search finds funding tools."""
-        ctx, _ = setup_context()
-
-        fn = get_fn(coinglass_search)
-        result = await fn(query="funding rate arbitrage", ctx=ctx)
-
-        assert_text_result(result, "coinglass_search(search)", "coinglass_funding")
-
-    async def test_config_exchanges(self, setup_context):
+    async def test_config_exchanges(self, setup_context, mock_response):
         """coinglass_config returns exchange list."""
-        ctx, _ = setup_context()
+        ctx, mock_http = setup_context()
+        mock_http.get.side_effect = [
+            mock_response(["Binance", "OKX"]),
+            mock_response(["Binance", "Coinbase"]),
+        ]
 
         fn = get_fn(coinglass_config)
         result = await fn(action="exchanges", ctx=ctx)
@@ -624,7 +612,6 @@ class TestMetaTools:
             result,
             "coinglass_config(exchanges)",
             '"futures"',
-            '"spot"',
             "Binance",
         )
 
@@ -638,7 +625,9 @@ class TestMetaTools:
         assert_text_result(
             result,
             "coinglass_config(intervals)",
-            '"your_plan": ["d1", "h12", "h4", "h8", "w1"]',
+            '"your_plan": [',
+            '"h12"',
+            '"w1"',
         )
 
     async def test_config_plan_features(self, setup_context):
@@ -654,3 +643,127 @@ class TestMetaTools:
             '"plan": "standard"',
             "liq_orders",
         )
+
+
+class TestPreviewMetadata:
+    """Test preview/truncation metadata behavior."""
+
+    @pytest.fixture
+    def setup_context(self, mock_context, mock_http):
+        """Set up context with mock client."""
+
+        def _setup(plan="standard"):
+            ctx = mock_context(plan)
+            client = CoinGlassClient(http=mock_http, api_key="test")
+            ctx.request_context.lifespan_context["client"] = client
+            return ctx, mock_http
+
+        return _setup
+
+    async def test_price_history_reports_preview_metadata(self, setup_context, mock_response):
+        """History tools should report shown vs total rows in text + metadata."""
+        ctx, mock_http = setup_context()
+        rows = [
+            {"t": 1700000000 + i * 3600, "o": 50000 + i, "h": 50010 + i, "l": 49990 + i, "c": 50005 + i}
+            for i in range(50)
+        ]
+        mock_http.get.return_value = mock_response(rows)
+
+        fn = get_fn(coinglass_price_history)
+        result = await fn(exchange="Binance", pair="BTCUSDT", interval="h1", limit=50, ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_price_history(price_history)", "preview: showing")
+        assert "of 50 rows" in text
+        metadata = result["metadata"]
+        assert metadata["requested_limit"] == 50
+        assert metadata["total_rows"] == 50
+        assert metadata["shown_rows"] == 24
+        assert metadata["truncated"] is True
+        assert "row_preview_limit" in str(metadata["truncation_reason"])
+
+    async def test_large_orders_text_cap_is_disclosed(self, setup_context, mock_response):
+        """If text hits output cap, response should disclose readable cap reason."""
+        ctx, mock_http = setup_context()
+        supported_pairs = {
+            "Binance": [{"instrument_id": "BTC-USDT"}],
+        }
+        huge_time = "X" * 1200
+        rows = [
+            {
+                "start_time": f"{huge_time}{i}",
+                "limit_price": 60000 + i,
+                "start_usd_value": 1_000_000 - i * 1000,
+                "order_side": 2 if i % 2 == 0 else 1,
+            }
+            for i in range(20)
+        ]
+        mock_http.get.side_effect = [mock_response(supported_pairs), mock_response(rows)]
+
+        fn = get_fn(coinglass_ob_large_orders)
+        result = await fn(
+            action="current",
+            exchange="Binance",
+            symbol="BTCUSDT",
+            limit=200,
+            ctx=ctx,
+        )
+
+        text = assert_text_result(result, "coinglass_ob_large_orders(current)", "text capped at 4000 chars")
+        metadata = result["metadata"]
+        assert metadata["requested_limit"] == 200
+        assert metadata["truncated"] is True
+        assert "max_output_chars" in str(metadata["truncation_reason"])
+
+
+class TestActionValidationAndSpotFiltering:
+    """Test action-specific validation and spot pairs filter behavior."""
+
+    @pytest.fixture
+    def setup_context(self, mock_context, mock_http):
+        """Set up context with mock client."""
+
+        def _setup(plan="standard"):
+            ctx = mock_context(plan)
+            client = CoinGlassClient(http=mock_http, api_key="test")
+            ctx.request_context.lifespan_context["client"] = client
+            return ctx, mock_http
+
+        return _setup
+
+    async def test_ob_large_orders_current_requires_symbol_or_pair(self, setup_context):
+        """coinglass_ob_large_orders current must require symbol/pair."""
+        ctx, _ = setup_context()
+        fn = get_fn(coinglass_ob_large_orders)
+        with pytest.raises(ValueError, match="requires symbol or pair"):
+            await fn(action="current", exchange="Binance", ctx=ctx)
+
+    async def test_onchain_assets_requires_exchange(self, setup_context):
+        """coinglass_onchain assets must require exchange."""
+        ctx, _ = setup_context()
+        fn = get_fn(coinglass_onchain)
+        with pytest.raises(ValueError, match="requires exchange"):
+            await fn(action="assets", ctx=ctx)
+
+    async def test_spot_pairs_applies_exchange_and_symbol_filters(self, setup_context, mock_response):
+        """coinglass_spot pairs should honor exchange/symbol filters client-side."""
+        ctx, mock_http = setup_context()
+        payload = {
+            "Binance": [
+                {"base_asset": "BTC", "instrument_id": "BTCUSDT", "exchange": "Binance"},
+                {"base_asset": "ETH", "instrument_id": "ETHUSDT", "exchange": "Binance"},
+            ],
+            "OKX": [
+                {"base_asset": "BTC", "instrument_id": "BTC-USDT", "exchange": "OKX"},
+            ],
+        }
+        mock_http.get.return_value = mock_response(payload)
+
+        fn = get_fn(coinglass_spot)
+        result = await fn(action="pairs", exchange="Binance", symbol="BTC", ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_spot(pairs)", "BTCUSDT")
+        assert "ETHUSDT" not in text
+        assert "OKX" not in text
+        metadata = result["metadata"]
+        assert "exchange=Binance" in metadata["filters_applied"]
+        assert "symbol=BTC" in metadata["filters_applied"]

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import math
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from numbers import Number
 from typing import Any, Callable
@@ -22,14 +23,94 @@ PASS_THROUGH_TOOLS = {
     "coinglass_market_info",
 }
 
+_FORMAT_META_CTX: ContextVar[dict[str, Any] | None] = ContextVar(
+    "coinglass_formatter_meta", default=None
+)
 
-def format_tool_response(tool: str, action: str, data: Any) -> str:
-    """Dispatch formatter by tool name."""
+
+def _int_or_none(value: Any) -> int | None:
+    number = _as_float(value)
+    if number is None:
+        return None
+    return int(number)
+
+
+def _extract_total_known(data: Any) -> int | None:
+    if isinstance(data, list):
+        return len(data)
+    if isinstance(data, dict):
+        for key in ("total", "total_rows", "total_count", "count", "size"):
+            candidate = data.get(key)
+            number = _int_or_none(candidate)
+            if number is not None and number >= 0:
+                return number
+    return None
+
+
+def _initial_format_metadata(
+    data: Any,
+    *,
+    requested_limit: int | None = None,
+    filters_applied: list[str] | None = None,
+    total_known: int | None = None,
+) -> dict[str, Any]:
+    inferred_total = total_known if total_known is not None else _extract_total_known(data)
+    return {
+        "truncated": False,
+        "requested_limit": requested_limit,
+        "shown_rows": None,
+        "total_rows": None,
+        "total_known": inferred_total,
+        "filters_applied": list(filters_applied or []),
+        "truncation_reason": None,
+    }
+
+
+def _set_truncation_reason(meta: dict[str, Any], reason: str) -> None:
+    current = meta.get("truncation_reason")
+    if not current:
+        meta["truncation_reason"] = reason
+        return
+    reasons = {part.strip() for part in str(current).split(",") if part.strip()}
+    reasons.add(reason)
+    meta["truncation_reason"] = ",".join(sorted(reasons))
+
+
+def format_tool_response_with_meta(
+    tool: str,
+    action: str,
+    data: Any,
+    *,
+    requested_limit: int | None = None,
+    filters_applied: list[str] | None = None,
+    total_known: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Dispatch formatter by tool name and capture preview/truncation metadata."""
     fn_name = f"format_{tool}"
     fn = globals().get(fn_name)
     if not callable(fn):
         raise KeyError(f"No formatter for tool '{tool}'")
-    return fn(action, data)
+
+    context_meta = _initial_format_metadata(
+        data,
+        requested_limit=requested_limit,
+        filters_applied=filters_applied,
+        total_known=total_known,
+    )
+    token = _FORMAT_META_CTX.set(context_meta)
+    try:
+        text = fn(action, data)
+        if context_meta.get("total_rows") is not None and context_meta.get("total_known") is None:
+            context_meta["total_known"] = context_meta["total_rows"]
+        return text, dict(context_meta)
+    finally:
+        _FORMAT_META_CTX.reset(token)
+
+
+def format_tool_response(tool: str, action: str, data: Any) -> str:
+    """Dispatch formatter by tool name."""
+    text, _ = format_tool_response_with_meta(tool, action, data)
+    return text
 
 
 def format_json_fallback(tool: str, action: str, data: Any, reason: str | None = None) -> str:
@@ -341,11 +422,40 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
 
 
 def _truncate(lines: list[str], total_items: int | None, shown_items: int | None) -> str:
-    text = "\n".join(lines)
+    context_meta = _FORMAT_META_CTX.get()
+    rendered_lines = list(lines)
+
+    if context_meta is not None:
+        if shown_items is not None:
+            context_meta["shown_rows"] = shown_items
+        if total_items is not None:
+            context_meta["total_rows"] = total_items
+            if context_meta.get("total_known") is None:
+                context_meta["total_known"] = total_items
+
+    if (
+        total_items is not None
+        and shown_items is not None
+        and shown_items < total_items
+    ):
+        if context_meta is not None:
+            context_meta["truncated"] = True
+            _set_truncation_reason(context_meta, "row_preview_limit")
+        preview_line = f"preview: showing {shown_items} of {total_items} rows"
+        if len(rendered_lines) > 1:
+            rendered_lines.insert(1, preview_line)
+        else:
+            rendered_lines.append(preview_line)
+
+    text = "\n".join(rendered_lines)
     if len(text) <= MAX_OUTPUT_CHARS:
         return text
 
-    kept = list(lines)
+    if context_meta is not None:
+        context_meta["truncated"] = True
+        _set_truncation_reason(context_meta, "max_output_chars")
+
+    kept = list(rendered_lines)
     removed = 0
     while len("\n".join(kept)) > MAX_OUTPUT_CHARS - 40 and len(kept) > 1:
         kept.pop()
@@ -356,11 +466,21 @@ def _truncate(lines: list[str], total_items: int | None, shown_items: int | None
     else:
         more_items = max(removed, 1)
 
-    suffix = f"... ({more_items} more items)"
+    suffix = (
+        f"... (text capped at {MAX_OUTPUT_CHARS} chars; "
+        f"{more_items} additional lines hidden)"
+    )
     result = "\n".join(kept + [suffix])
     if len(result) > MAX_OUTPUT_CHARS:
         allowed = MAX_OUTPUT_CHARS - len(suffix) - 1
         result = result[:allowed].rstrip() + "\n" + suffix
+
+    if context_meta is not None:
+        if shown_items is not None and total_items is not None:
+            context_meta["shown_rows"] = max(shown_items - removed, 0)
+        if context_meta.get("shown_rows") is None:
+            context_meta["shown_rows"] = None
+
     return result
 
 

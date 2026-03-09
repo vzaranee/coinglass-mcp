@@ -21,9 +21,9 @@ Get spot market data.
 | Action | Description | Endpoint | Required Params |
 |--------|-------------|----------|-----------------|
 | `coins` | Supported coins | `/api/spot/supported-coins` | - |
-| `pairs` | Exchange pairs | `/api/spot/supported-exchange-pairs` | - |
+| `pairs` | Exchange pairs (supports `exchange` and `symbol` filters) | `/api/spot/supported-exchange-pairs` | - |
 | `coins_markets` | Coin data | `/api/spot/coins-markets` | - |
-| `pairs_markets` | Pair data | `/api/spot/pairs-markets` | - |
+| `pairs_markets` | Pair data | `/api/spot/pairs-markets` | `symbol` |
 | `price_history` | OHLC | `/api/price/ohlc-history` | exchange, pair, interval |
 
 ### Parameters
@@ -34,10 +34,10 @@ ActionSpot = Literal["coins", "pairs", "coins_markets", "pairs_markets", "price_
 @mcp.tool
 async def coinglass_spot(
     action: Annotated[ActionSpot, Field(
-        description="coins: supported | pairs: exchange pairs | coins_markets: coin data | pairs_markets: pair data | price_history: OHLC"
+        description="coins: supported | pairs: exchange pairs (filterable by exchange/symbol) | coins_markets: coin data | pairs_markets: pair data (requires symbol) | price_history: OHLC"
     )],
-    symbol: Annotated[str | None, Field(description="Coin filter")] = None,
-    exchange: Annotated[str | None, Field(description="Exchange filter/requirement")] = None,
+    symbol: Annotated[str | None, Field(description="Coin/base-asset filter; required for pairs_markets")] = None,
+    exchange: Annotated[str | None, Field(description="Exchange filter; required for price_history")] = None,
     pair: Annotated[str | None, Field(description="Pair for price_history")] = None,
     interval: Annotated[str | None, Field(description="For price_history: h1, h4, d1")] = None,
     limit: Annotated[int, Field(ge=1, le=4500)] = 500,
@@ -54,6 +54,9 @@ coinglass_spot(action="coins")
 # Spot market data for BTC
 coinglass_spot(action="coins_markets", symbol="BTC")
 
+# Spot pairs filtered by exchange + base asset
+coinglass_spot(action="pairs", exchange="Binance", symbol="BTC")
+
 # Spot price history
 coinglass_spot(
     action="price_history",
@@ -64,6 +67,10 @@ coinglass_spot(
 ```
 
 ### Response (coins_markets)
+
+Runtime responses return compact `text` plus preview/truncation metadata (`truncated`,
+`requested_limit`, `shown_rows`, `total_rows`/`total_known`, `filters_applied`,
+`truncation_reason`).
 
 ```json
 {
@@ -206,9 +213,9 @@ ActionOnChain = Literal["assets", "balance_list", "balance_chart", "transfers"]
 @mcp.tool
 async def coinglass_onchain(
     action: Annotated[ActionOnChain, Field(
-        description="assets: exchange holdings | balance_list: balances by asset | balance_chart: historical | transfers: ERC-20 txs"
+        description="assets: exchange holdings (requires exchange) | balance_list: balances by asset | balance_chart: historical | transfers: ERC-20 txs"
     )],
-    exchange: Annotated[str | None, Field(description="Exchange filter")] = None,
+    exchange: Annotated[str | None, Field(description="Exchange filter (required for assets)")] = None,
     asset: Annotated[str | None, Field(description="Asset: BTC, ETH, USDT")] = None,
     range: Annotated[str | None, Field(description="For balance_chart: 7d, 30d, 90d")] = None,
     transfer_type: Annotated[Literal["inflow", "outflow", "internal"] | None, Field(description="Filter transfers")] = None,
@@ -221,7 +228,7 @@ async def coinglass_onchain(
 
 ```python
 # All exchange assets
-coinglass_onchain(action="assets")
+coinglass_onchain(action="assets", exchange="Binance")
 
 # BTC balances across exchanges
 coinglass_onchain(action="balance_list", asset="BTC")

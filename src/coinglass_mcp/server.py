@@ -68,6 +68,9 @@ mcp = FastMCP(
 
 26 tools wrapping 143 CoinGlass API v4 endpoints. All responses are formatted
 (raw JSON compressed to ~1-3KB structured summaries).
+Outputs use compact previews by design; see response metadata for
+truncation details (`truncated`, `shown_rows`, `total_rows`, `requested_limit`,
+`filters_applied`, `truncation_reason`).
 
 Quick start:
 - Market overview: coinglass_market_data(action="coins_summary")
@@ -147,6 +150,44 @@ def check_params(action: str, **kwargs: Any) -> None:
         )
 
 
+def _as_int(value: Any) -> int | None:
+    """Best-effort conversion to int."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return int(float(stripped))
+        except ValueError:
+            return None
+    return None
+
+
+def _normalize_filter_list(value: Any) -> list[str]:
+    """Normalize filter metadata into compact list[str]."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple, set)):
+        out: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            text = str(item).strip()
+            if text:
+                out.append(text)
+        return out
+    text = str(value).strip()
+    return [text] if text else []
+
+
 class StaticBearerTokenVerifier(TokenVerifier):
     """Simple bearer token verifier for optional SSE auth."""
 
@@ -164,13 +205,44 @@ def ok(action: str, data: Any, **meta: Any) -> dict:
     """Create formatted success response with compact text for LLM consumption."""
     caller = inspect.currentframe().f_back
     tool_name = caller.f_code.co_name if caller else "unknown_tool"
+    caller_locals = caller.f_locals if caller else {}
+
+    requested_limit = _as_int(
+        meta.get("requested_limit", meta.get("limit", caller_locals.get("limit")))
+    )
+    filters_applied = _normalize_filter_list(meta.get("filters_applied"))
+    total_known = _as_int(
+        meta.get(
+            "total_known",
+            meta.get("total", meta.get("count", meta.get("total_rows"))),
+        )
+    )
 
     try:
-        text = formatters.format_tool_response(tool_name, action, data)
+        text, preview_meta = formatters.format_tool_response_with_meta(
+            tool_name,
+            action,
+            data,
+            requested_limit=requested_limit,
+            filters_applied=filters_applied,
+            total_known=total_known,
+        )
     except Exception as exc:
         text = formatters.format_json_fallback(tool_name, action, data, reason=str(exc))
+        preview_meta = {
+            "truncated": True,
+            "requested_limit": requested_limit,
+            "shown_rows": None,
+            "total_rows": None,
+            "total_known": total_known,
+            "filters_applied": filters_applied,
+            "truncation_reason": "formatter_fallback",
+        }
 
-    return {"text": text}
+    if preview_meta.get("total_known") is None:
+        preview_meta["total_known"] = total_known
+
+    return {"text": text, "metadata": preview_meta}
 
 
 async def request_with_fallback(
@@ -222,6 +294,17 @@ def _normalize_exchange_key(exchange: str) -> str:
     return "".join(ch for ch in exchange.strip().lower() if ch.isalnum())
 
 
+def _match_exchange_name(name: Any, expected_exchange: str | None) -> bool:
+    """Case/punctuation-insensitive exchange matcher."""
+    if not expected_exchange:
+        return True
+    if name is None:
+        return False
+    return _normalize_exchange_key(str(name)) == _normalize_exchange_key(
+        expected_exchange
+    )
+
+
 def _extract_base_quote(symbol: str) -> tuple[str, str] | None:
     """Extract base/quote from common futures instrument formats."""
     cleaned = symbol.strip().upper().replace("/", "-")
@@ -249,6 +332,69 @@ def _extract_base_quote(symbol: str) -> tuple[str, str] | None:
             return cleaned[: -len(quote)], quote
 
     return None
+
+
+def _matches_base_symbol(candidate: Any, base_symbol: str | None) -> bool:
+    """Best-effort base-asset matcher for symbols/pairs/instrument ids."""
+    if not base_symbol:
+        return True
+    if candidate is None:
+        return False
+
+    needle = base_symbol.strip().upper()
+    if not needle:
+        return True
+
+    text = str(candidate).strip().upper()
+    if not text:
+        return False
+    if text == needle:
+        return True
+
+    extracted = _extract_base_quote(text)
+    if extracted and extracted[0] == needle:
+        return True
+    return text.startswith(needle)
+
+
+def _spot_pair_row_matches(
+    row: Any, *, exchange: str | None = None, symbol: str | None = None
+) -> bool:
+    """Client-side filter for spot supported pairs payload variants."""
+    if isinstance(row, dict):
+        exchange_ok = (
+            _match_exchange_name(_pick_exchange(row), exchange)
+            if exchange
+            else True
+        )
+        symbol_ok = (
+            _matches_base_symbol(_pick_symbol(row), symbol) if symbol else True
+        )
+        return exchange_ok and symbol_ok
+
+    return _matches_base_symbol(row, symbol)
+
+
+def _pick_exchange(row: dict[str, Any]) -> Any:
+    return (
+        row.get("exchange")
+        or row.get("exchange_name")
+        or row.get("exchangeName")
+        or row.get("exName")
+        or row.get("ex_name")
+        or row.get("key")
+    )
+
+
+def _pick_symbol(row: dict[str, Any]) -> Any:
+    return (
+        row.get("base_asset")
+        or row.get("baseAsset")
+        or row.get("symbol")
+        or row.get("pair")
+        or row.get("instrument_id")
+        or row.get("instrumentId")
+    )
 
 
 def _instrument_candidates(exchange: str | None, pair: str) -> list[str]:
@@ -507,6 +653,9 @@ async def coinglass_market_info(
             "/api/futures/supported-exchange-pairs",
             {"exchange": exchange} if exchange else None,
         )
+        filters_applied: list[str] = []
+        if exchange:
+            filters_applied.append(f"exchange={exchange}")
         # Client-side symbol filter for pairs
         if symbol:
             sym_upper = symbol.upper()
@@ -517,7 +666,14 @@ async def coinglass_market_info(
                 data = {k: [r for r in v if isinstance(r, dict) and _match(r)] for k, v in data.items() if isinstance(v, list)}
             elif isinstance(data, list):
                 data = [r for r in data if isinstance(r, dict) and _match(r)]
-        return ok(action, data, exchange=exchange, symbol=symbol)
+            filters_applied.append(f"symbol={symbol}")
+        return ok(
+            action,
+            data,
+            exchange=exchange,
+            symbol=symbol,
+            filters_applied=filters_applied,
+        )
 
     elif action == "exchanges":
         data = await client.request("/api/futures/supported-exchange-pairs")
@@ -555,7 +711,7 @@ async def coinglass_market_data(
     action: Annotated[
         ActionMarketData,
         Field(
-            description="coins_summary: single coin metrics (client-side filter) | pairs_summary: per-pair metrics (API requires symbol) | price_changes: price % changes across timeframes | volume_footprint: futures footprint snapshots"
+            description="coins_summary: single coin metrics (REQUIRES symbol) | pairs_summary: per-pair metrics (defaults to BTC if symbol omitted) | price_changes: price % changes across timeframes | volume_footprint: futures footprint snapshots"
         ),
     ],
     symbol: Annotated[
@@ -569,8 +725,9 @@ async def coinglass_market_data(
     Returns aggregated market metrics including price, open interest, volume,
     and funding rates. Data is updated frequently (30 second cache).
 
-    Note: pairs_summary requires symbol in the CoinGlass API. If omitted,
-    this tool defaults to BTC for compatibility.
+    Notes:
+        - coins_summary requires symbol.
+        - pairs_summary defaults to BTC when symbol is omitted.
 
     Examples:
         - BTC metrics: action="coins_summary", symbol="BTC"
@@ -608,11 +765,13 @@ async def coinglass_market_data(
             {},
         )
 
+    filters_applied = [f"symbol={symbol}"] if action == "coins_summary" and symbol else []
     return ok(
         action,
         data,
         symbol=symbol,
         total=len(data) if isinstance(data, list) else None,
+        filters_applied=filters_applied,
     )
 
 
@@ -995,10 +1154,20 @@ async def coinglass_funding_current(
     else:
         params = {"usd": usd, "exchange_list": exchange_list}
     data = await client.request(endpoints[action], params)
+    filters_applied: list[str] = []
     if action in ("rates", "accumulated") and symbol and isinstance(data, list):
         data = [x for x in data if isinstance(x, dict) and x.get("symbol") == symbol]
+        filters_applied.append(f"symbol={symbol}")
 
-    return ok(action, data, symbol=symbol, range=range, usd=usd, exchange_list=exchange_list)
+    return ok(
+        action,
+        data,
+        symbol=symbol,
+        range=range,
+        usd=usd,
+        exchange_list=exchange_list,
+        filters_applied=filters_applied,
+    )
 
 
 # ============================================================================
@@ -1223,10 +1392,12 @@ async def coinglass_liq_history(
         params = {}
 
     data = await client.request(endpoints[action], params)
+    filters_applied: list[str] = []
     if action == "max_pain" and symbol and isinstance(data, list):
         data = [x for x in data if isinstance(x, dict) and x.get("symbol") == symbol]
+        filters_applied.append(f"symbol={symbol}")
 
-    return ok(action, data, symbol=symbol or pair)
+    return ok(action, data, symbol=symbol or pair, filters_applied=filters_applied)
 
 
 @mcp.tool(
@@ -1506,7 +1677,8 @@ async def coinglass_ob_large_orders(
         ActionLargeOrders,
         Field(
             description=(
-                "current: futures active large orders | history: futures large-order history "
+                "current: futures active large orders (requires symbol or pair) "
+                "| history: futures large-order history (requires exchange,symbol,start_time,end_time,state) "
                 "| large_orders: cross-market large orders "
                 "| legacy_current: /api/orderbook/large-limit-order- "
                 "| legacy_history: /api/orderbook/large-limit-order-history-"
@@ -1519,7 +1691,7 @@ async def coinglass_ob_large_orders(
     pair: Annotated[str | None, Field(description="Filter by pair")] = None,
     symbol: Annotated[
         str | None,
-        Field(description="Symbol for large_orders/legacy_* actions (coin or pair)"),
+        Field(description="Symbol/pair for current/history/large_orders/legacy_* actions"),
     ] = None,
     exchanges: Annotated[
         str | None,
@@ -1655,6 +1827,7 @@ async def coinglass_ob_large_orders(
                 else None
             )
         ),
+        limit=limit,
     )
 
 
@@ -1953,7 +2126,8 @@ async def coinglass_spot(
         ActionSpot,
         Field(
             description=(
-                "coins: supported coins | pairs: exchange pairs | coins_markets: coin data "
+                "coins: supported coins | pairs: exchange pairs (supports exchange/symbol filters) "
+                "| coins_markets: coin data "
                 "| pairs_markets: pair data | price_history: OHLC "
                 "| taker_history: pair taker volume "
                 "| taker_aggregated_history: aggregated taker volume "
@@ -1966,9 +2140,13 @@ async def coinglass_spot(
             )
         ),
     ],
-    symbol: Annotated[str | None, Field(description="Coin filter")] = None,
+    symbol: Annotated[
+        str | None,
+        Field(description="Coin/base-asset filter (e.g., BTC, ETH); required for pairs_markets"),
+    ] = None,
     exchange: Annotated[
-        str | None, Field(description="Exchange (required for price_history/taker_history)")
+        str | None,
+        Field(description="Exchange (required for price_history/taker_history; optional filter for pairs)"),
     ] = None,
     pair: Annotated[
         str | None, Field(description="Pair (required for price_history/taker_history)")
@@ -2029,6 +2207,8 @@ async def coinglass_spot(
         "orderbook_large_limit_order_history": "/api/spot/orderbook/large-limit-order-history",
         "volume_footprint_history": "/api/spot/volume/footprint-history",
     }
+
+    filters_applied: list[str] = []
 
     if action == "price_history":
         price_interval = interval or "h1"
@@ -2162,17 +2342,46 @@ async def coinglass_spot(
         if not symbol:
             raise ValueError("Action 'pairs_markets' requires symbol.")
         params = {"symbol": symbol}
+    elif action == "pairs":
+        params = {"exchange": exchange} if exchange else {}
     else:
         params = {}
 
     data = await request_with_fallback(client, endpoints[action], params)
 
-    # Client-side symbol filtering for list endpoints (coins_markets, etc.)
+    # Client-side filtering for endpoints with broad payloads.
     if symbol and action == "coins_markets" and isinstance(data, list):
         sym_upper = symbol.upper()
         filtered = [r for r in data if str(r.get("symbol", "")).upper() == sym_upper]
-        if filtered:
-            data = filtered
+        data = filtered
+        filters_applied.append(f"symbol={symbol}")
+    if action == "pairs" and (exchange or symbol):
+        if exchange:
+            filters_applied.append(f"exchange={exchange}")
+        if symbol:
+            filters_applied.append(f"symbol={symbol}")
+
+        if isinstance(data, dict):
+            filtered_map: dict[str, list[Any]] = {}
+            for ex_name, rows in data.items():
+                if exchange and not _match_exchange_name(ex_name, exchange):
+                    continue
+                if not isinstance(rows, list):
+                    continue
+                filtered_rows = [
+                    row
+                    for row in rows
+                    if _spot_pair_row_matches(row, exchange=exchange, symbol=symbol)
+                ]
+                if filtered_rows:
+                    filtered_map[ex_name] = filtered_rows
+            data = filtered_map
+        elif isinstance(data, list):
+            data = [
+                row
+                for row in data
+                if _spot_pair_row_matches(row, exchange=exchange, symbol=symbol)
+            ]
 
     return ok(
         action,
@@ -2181,6 +2390,8 @@ async def coinglass_spot(
         exchange=exchange,
         interval=interval,
         range=range,
+        limit=limit,
+        filters_applied=filters_applied,
     )
 
 
@@ -2294,10 +2505,13 @@ async def coinglass_onchain(
     action: Annotated[
         ActionOnChain,
         Field(
-            description="assets: exchange holdings | balance_list: balances by asset | balance_chart: historical | transfers: ERC-20 transactions | whale_transfer: large on-chain transfers | assets_transparency: exchange proof-of-assets list"
+            description="assets: exchange holdings (REQUIRES exchange) | balance_list: balances by asset | balance_chart: historical | transfers: ERC-20 transactions | whale_transfer: large on-chain transfers | assets_transparency: exchange proof-of-assets list"
         ),
     ],
-    exchange: Annotated[str | None, Field(description="Exchange filter")] = None,
+    exchange: Annotated[
+        str | None,
+        Field(description="Exchange filter (required for assets action)"),
+    ] = None,
     asset: Annotated[
         str | None, Field(description="Asset: BTC, ETH, USDT")
     ] = None,

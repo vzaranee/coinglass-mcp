@@ -19,6 +19,7 @@ CoinGlass is the go-to platform for crypto derivatives data — open interest, f
 
 - **26 MCP Tools → 143 Endpoints** — Facade pattern keeps tool count low for LLM context efficiency
 - **Response Formatters** — Raw API JSON (up to 2MB) → structured text summaries (~1-3KB)
+- **Honest Preview Metadata** — Compact text previews are paired with machine-readable metadata (`truncated`, `shown_rows`, `total_rows`, `requested_limit`, `filters_applied`, `truncation_reason`)
 - **Server-Side Symbol Filtering** — Endpoints that return all coins are filtered to your requested symbol
 - **Plan-Aware Gating** — Automatic feature restrictions based on your CoinGlass subscription tier
 - **SSE & stdio Transport** — Works with Claude Desktop (stdio) and remote setups (SSE)
@@ -434,6 +435,10 @@ Total OI: $25.7B (+2.3% 24h)
 ```
 
 This 723x compression (2MB → 2.8KB) keeps LLM context clean and costs low.
+
+Each tool response includes:
+- `text`: compact preview for LLM context
+- `metadata`: preview/truncation fields so the preview is never mistaken for full raw data
 
 ---
 

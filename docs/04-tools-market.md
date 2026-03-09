@@ -98,9 +98,9 @@ ActionMarketData = Literal["coins_summary", "pairs_summary", "price_changes"]
 @mcp.tool
 async def coinglass_market_data(
     action: Annotated[ActionMarketData, Field(
-        description="coins_summary: all coins metrics | pairs_summary: all pairs metrics | price_changes: price % changes"
+        description="coins_summary: single-coin metrics (requires symbol) | pairs_summary: pair metrics (defaults to BTC when symbol omitted) | price_changes: price % changes"
     )],
-    symbol: Annotated[str | None, Field(description="Filter by coin (BTC, ETH)")] = None,
+    symbol: Annotated[str | None, Field(description="Required for coins_summary; optional for other actions")] = None,
     ctx: Context
 ) -> dict:
 ```
@@ -108,14 +108,11 @@ async def coinglass_market_data(
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `action` | Literal | Yes | Operation to perform |
-| `symbol` | str | No | Filter by coin symbol |
+| `symbol` | str | Action-dependent | `coins_summary`: required. Other actions: optional |
 
 ### Examples
 
 ```python
-# Get all coins market data
-coinglass_market_data(action="coins_summary")
-
 # Get BTC market summary
 coinglass_market_data(action="coins_summary", symbol="BTC")
 
@@ -124,6 +121,10 @@ coinglass_market_data(action="price_changes")
 ```
 
 ### Response Structure
+
+Runtime responses return compact `text` plus machine-readable `metadata` fields such as
+`truncated`, `requested_limit`, `shown_rows`, `total_rows`/`total_known`,
+`filters_applied`, and `truncation_reason`.
 
 #### coins_summary
 ```json

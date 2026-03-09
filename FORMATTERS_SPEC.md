@@ -8,6 +8,7 @@ Proven compression: 723-3410x (2MB raw → 2.9KB formatted).
 - New file: `src/coinglass_mcp/formatters.py`
 - Each tool gets a formatter function: `format_{tool_name}(action: str, data: Any) -> str`
 - `ok()` in server.py calls formatter before returning text
+- Tool responses keep compact `text` previews and include machine-readable preview metadata (`truncated`, `shown_rows`, `total_rows`/`total_known`, `requested_limit`, `filters_applied`, `truncation_reason`)
 - If no formatter exists for a tool/action, fall back to `json.dumps(data)[:2000]` with truncation warning
 
 ## Formatter Pattern
