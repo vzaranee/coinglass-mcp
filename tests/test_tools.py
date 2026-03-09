@@ -130,6 +130,26 @@ class TestMarketTools:
             "OKX",
         )
 
+    async def test_market_info_pairs_symbol_filter_avoids_prefix_false_positives(
+        self, setup_context, mock_response
+    ):
+        """market_info pairs symbol filter should not match ETHW when filtering ETH."""
+        ctx, mock_http = setup_context()
+        mock_http.get.return_value = mock_response({
+            "Binance": [
+                {"base_asset": "ETH", "instrument_id": "ETHUSDT"},
+                {"base_asset": "ETHW", "instrument_id": "ETHWUSDT"},
+            ]
+        })
+
+        fn = get_fn(coinglass_market_info)
+        result = await fn("pairs", symbol="ETH", ctx=ctx)
+
+        text = assert_text_result(result, "coinglass_market_info(pairs)", "ETHUSDT")
+        assert "ETHWUSDT" not in text
+        metadata = result["metadata"]
+        assert "symbol=ETH" in metadata["filters_applied"]
+
     async def test_market_data_coins_summary(self, setup_context, mock_response):
         """coinglass_market_data returns coins summary for a symbol."""
         ctx, mock_http = setup_context()
@@ -581,6 +601,43 @@ class TestIndicatorTools:
             "0.14",
         )
 
+    async def test_indicators_requested_limit_not_inferred_when_not_explicit(
+        self, setup_context, mock_response
+    ):
+        """requested_limit should stay None when action does not explicitly use limit."""
+        ctx, mock_http = setup_context()
+        mock_http.get.return_value = mock_response([
+            {"date": "2024-01-01", "value": 55, "classification": "Neutral"},
+        ])
+
+        fn = get_fn(coinglass_indicators)
+        result = await fn(action="fear_greed", ctx=ctx)
+
+        assert result["metadata"]["requested_limit"] is None
+
+    async def test_indicators_interval_plan_gating_for_interval_driven_actions(
+        self, setup_context
+    ):
+        """Interval-driven indicator actions should enforce plan interval availability."""
+        ctx, _ = setup_context("hobbyist")
+        fn = get_fn(coinglass_indicators)
+
+        with pytest.raises(ValueError, match="not available"):
+            await fn(
+                action="futures_rsi",
+                exchange="Binance",
+                symbol="BTCUSDT",
+                interval="m5",
+                ctx=ctx,
+            )
+
+        with pytest.raises(ValueError, match="not available"):
+            await fn(
+                action="coinbase_premium",
+                interval="m5",
+                ctx=ctx,
+            )
+
 
 class TestMetaTools:
     """Test meta tools."""
@@ -710,9 +767,15 @@ class TestPreviewMetadata:
 
         text = assert_text_result(result, "coinglass_ob_large_orders(current)", "text capped at 4000 chars")
         metadata = result["metadata"]
-        assert metadata["requested_limit"] == 200
+        assert metadata["requested_limit"] is None
         assert metadata["truncated"] is True
         assert "max_output_chars" in str(metadata["truncation_reason"])
+        preview_line = next(
+            line for line in text.splitlines() if line.startswith("preview: showing ")
+        )
+        assert preview_line == (
+            f"preview: showing {metadata['shown_rows']} of {metadata['total_rows']} rows"
+        )
 
 
 class TestActionValidationAndSpotFiltering:

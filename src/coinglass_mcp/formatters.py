@@ -424,6 +424,7 @@ def _render_table(headers: list[str], rows: list[list[str]]) -> list[str]:
 def _truncate(lines: list[str], total_items: int | None, shown_items: int | None) -> str:
     context_meta = _FORMAT_META_CTX.get()
     rendered_lines = list(lines)
+    preview_line_index: int | None = None
 
     if context_meta is not None:
         if shown_items is not None:
@@ -443,8 +444,10 @@ def _truncate(lines: list[str], total_items: int | None, shown_items: int | None
             _set_truncation_reason(context_meta, "row_preview_limit")
         preview_line = f"preview: showing {shown_items} of {total_items} rows"
         if len(rendered_lines) > 1:
+            preview_line_index = 1
             rendered_lines.insert(1, preview_line)
         else:
+            preview_line_index = len(rendered_lines)
             rendered_lines.append(preview_line)
 
     text = "\n".join(rendered_lines)
@@ -461,8 +464,14 @@ def _truncate(lines: list[str], total_items: int | None, shown_items: int | None
         kept.pop()
         removed += 1
 
+    final_shown_items: int | None = None
     if total_items is not None and shown_items is not None:
-        more_items = max(total_items - shown_items, 0) + removed
+        final_shown_items = max(shown_items - removed, 0)
+        if preview_line_index is not None and preview_line_index < len(kept):
+            kept[preview_line_index] = (
+                f"preview: showing {final_shown_items} of {total_items} rows"
+            )
+        more_items = max(total_items - final_shown_items, 0)
     else:
         more_items = max(removed, 1)
 
@@ -476,8 +485,8 @@ def _truncate(lines: list[str], total_items: int | None, shown_items: int | None
         result = result[:allowed].rstrip() + "\n" + suffix
 
     if context_meta is not None:
-        if shown_items is not None and total_items is not None:
-            context_meta["shown_rows"] = max(shown_items - removed, 0)
+        if final_shown_items is not None:
+            context_meta["shown_rows"] = final_shown_items
         if context_meta.get("shown_rows") is None:
             context_meta["shown_rows"] = None
 

@@ -205,11 +205,8 @@ def ok(action: str, data: Any, **meta: Any) -> dict:
     """Create formatted success response with compact text for LLM consumption."""
     caller = inspect.currentframe().f_back
     tool_name = caller.f_code.co_name if caller else "unknown_tool"
-    caller_locals = caller.f_locals if caller else {}
 
-    requested_limit = _as_int(
-        meta.get("requested_limit", meta.get("limit", caller_locals.get("limit")))
-    )
+    requested_limit = _as_int(meta.get("requested_limit", meta.get("limit")))
     filters_applied = _normalize_filter_list(meta.get("filters_applied"))
     total_known = _as_int(
         meta.get(
@@ -666,14 +663,25 @@ async def coinglass_market_info(
             filters_applied.append(f"exchange={exchange}")
         # Client-side symbol filter for pairs
         if symbol:
-            sym_upper = symbol.upper()
-            def _match(r: dict) -> bool:
-                return (str(r.get("base_asset", r.get("baseAsset", r.get("symbol", "")))).upper() == sym_upper
-                        or sym_upper in str(r.get("instrument_id", r.get("instrumentId", r.get("pair", "")))).upper())
             if isinstance(data, dict):
-                data = {k: [r for r in v if isinstance(r, dict) and _match(r)] for k, v in data.items() if isinstance(v, list)}
+                filtered_map: dict[str, list[Any]] = {}
+                for ex_name, rows in data.items():
+                    if exchange and not _match_exchange_name(ex_name, exchange):
+                        continue
+                    if not isinstance(rows, list):
+                        continue
+                    filtered_rows = [
+                        row for row in rows if _spot_pair_row_matches(row, symbol=symbol)
+                    ]
+                    if filtered_rows:
+                        filtered_map[ex_name] = filtered_rows
+                data = filtered_map
             elif isinstance(data, list):
-                data = [r for r in data if isinstance(r, dict) and _match(r)]
+                data = [
+                    row
+                    for row in data
+                    if _spot_pair_row_matches(row, exchange=exchange, symbol=symbol)
+                ]
             filters_applied.append(f"symbol={symbol}")
         return ok(
             action,
@@ -839,6 +847,7 @@ async def coinglass_price_history(
         exchange=exchange,
         pair=pair,
         interval=interval,
+        requested_limit=limit,
         total=len(data) if isinstance(data, list) else None,
     )
 
@@ -947,6 +956,7 @@ async def coinglass_oi_history(
         symbol=symbol or pair,
         exchange=exchange,
         interval=interval,
+        requested_limit=limit,
         total=len(data) if isinstance(data, list) else None,
     )
 
@@ -1091,6 +1101,7 @@ async def coinglass_funding_history(
         data,
         symbol=symbol or pair,
         interval=interval,
+        requested_limit=limit,
         total=len(data) if isinstance(data, list) else None,
     )
 
@@ -1289,6 +1300,7 @@ async def coinglass_long_short(
         exchange=exchange,
         pair=pair,
         interval=interval,
+        requested_limit=limit,
         total=len(data) if isinstance(data, list) else None,
     )
 
@@ -1405,7 +1417,13 @@ async def coinglass_liq_history(
         data = [x for x in data if isinstance(x, dict) and x.get("symbol") == symbol]
         filters_applied.append(f"symbol={symbol}")
 
-    return ok(action, data, symbol=symbol or pair, filters_applied=filters_applied)
+    return ok(
+        action,
+        data,
+        symbol=symbol or pair,
+        requested_limit=limit if action in {"pair", "aggregated"} else None,
+        filters_applied=filters_applied,
+    )
 
 
 @mcp.tool(
@@ -1658,7 +1676,14 @@ async def coinglass_ob_history(
 
     data = await client.request(endpoints[action], params)
 
-    return ok(action, data, symbol=symbol or pair, interval=interval, range=range)
+    return ok(
+        action,
+        data,
+        symbol=symbol or pair,
+        interval=interval,
+        range=range,
+        requested_limit=limit,
+    )
 
 
 ActionLargeOrders = Literal[
@@ -1821,6 +1846,7 @@ async def coinglass_ob_large_orders(
 
     data = await client.request(endpoint, params)
 
+    requested_limit = limit if action in {"history", "legacy_history"} else None
     return ok(
         action,
         data,
@@ -1835,7 +1861,7 @@ async def coinglass_ob_large_orders(
                 else None
             )
         ),
-        limit=limit,
+        requested_limit=requested_limit,
     )
 
 
@@ -2094,6 +2120,11 @@ async def coinglass_taker(
         market=market,
         interval=interval,
         range=range or ("24h" if action == "by_exchange" else None),
+        requested_limit=(
+            limit
+            if action in {"pair_history", "coin_history", "aggregated_ratio"}
+            else None
+        ),
     )
 
 
@@ -2393,6 +2424,19 @@ async def coinglass_spot(
                 if _spot_pair_row_matches(row, exchange=exchange, symbol=symbol)
             ]
 
+    requested_limit = (
+        limit
+        if action
+        in {
+            "price_history",
+            "taker_history",
+            "taker_aggregated_history",
+            "orderbook_aggregated_ask_bids_history",
+            "orderbook_ask_bids_history",
+            "orderbook_history",
+        }
+        else None
+    )
     return ok(
         action,
         data,
@@ -2400,7 +2444,7 @@ async def coinglass_spot(
         exchange=exchange,
         interval=interval,
         range=range,
-        limit=limit,
+        requested_limit=requested_limit,
         filters_applied=filters_applied,
     )
 
@@ -3010,6 +3054,7 @@ async def coinglass_indicators(
                 f"Action '{action}' requires exchange + symbol + interval "
                 "(e.g., exchange='Binance', symbol='BTCUSDT', interval='h1')"
             )
+        check_interval(ctx, interval)
         if action in {"futures_rsi", "futures_ma", "futures_ema"}:
             params = {
                 **base_series_params,
@@ -3036,6 +3081,7 @@ async def coinglass_indicators(
             raise ValueError(
                 f"Action '{action}' requires exchange + symbol + interval."
             )
+        check_interval(ctx, interval)
         params = {
             "exchange": exchange,
             "symbol": symbol,
@@ -3047,6 +3093,7 @@ async def coinglass_indicators(
     elif action == "coinbase_premium":
         if not interval:
             raise ValueError("Action 'coinbase_premium' requires interval.")
+        check_interval(ctx, interval)
         params = {
             "interval": interval,
             "limit": limit,
@@ -3069,7 +3116,27 @@ async def coinglass_indicators(
         if filtered:
             data = filtered
 
-    return ok(action, data, symbol=symbol)
+    return ok(
+        action,
+        data,
+        symbol=symbol,
+        requested_limit=(
+            limit
+            if action
+            in {
+                "futures_rsi",
+                "futures_ma",
+                "futures_ema",
+                "futures_macd",
+                "futures_boll",
+                "basis",
+                "borrow_rate",
+                "whale_index",
+                "coinbase_premium",
+            }
+            else None
+        ),
+    )
 
 
 # ============================================================================
