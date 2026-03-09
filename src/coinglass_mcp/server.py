@@ -2381,7 +2381,7 @@ async def coinglass_spot(
                 filtered_rows = [
                     row
                     for row in rows
-                    if _spot_pair_row_matches(row, exchange=exchange, symbol=symbol)
+                    if _spot_pair_row_matches(row, symbol=symbol)
                 ]
                 if filtered_rows:
                     filtered_map[ex_name] = filtered_rows

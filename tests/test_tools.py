@@ -749,11 +749,11 @@ class TestActionValidationAndSpotFiltering:
         ctx, mock_http = setup_context()
         payload = {
             "Binance": [
-                {"base_asset": "BTC", "instrument_id": "BTCUSDT", "exchange": "Binance"},
-                {"base_asset": "ETH", "instrument_id": "ETHUSDT", "exchange": "Binance"},
+                {"base_asset": "BTC", "instrument_id": "BTCUSDT"},
+                {"base_asset": "ETH", "instrument_id": "ETHUSDT"},
             ],
             "OKX": [
-                {"base_asset": "BTC", "instrument_id": "BTC-USDT", "exchange": "OKX"},
+                {"base_asset": "BTC", "instrument_id": "BTC-USDT"},
             ],
         }
 
@@ -782,10 +782,10 @@ class TestActionValidationAndSpotFiltering:
         ctx, mock_http = setup_context()
         payload = {
             "Binance": [
-                {"base_asset": "BTC", "instrument_id": "BTCUSDT", "exchange": "Binance"},
+                {"base_asset": "BTC", "instrument_id": "BTCUSDT"},
             ],
             "Coinbase": [
-                {"base_asset": "BTC", "instrument_id": "BTC-USD", "exchange": "Coinbase"},
+                {"base_asset": "BTC", "instrument_id": "BTC-USD"},
             ],
         }
 
